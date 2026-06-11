@@ -3,20 +3,35 @@ import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 
-/// View transform between display coordinates (the rotated page) and
-/// screen coordinates: `screen = display * scale + offset`.
-class PageCamera extends ChangeNotifier {
+/// Read-only view transform the painters consume:
+/// `screen = display * scale + offset`. Implemented by the document
+/// camera itself and by per-page portals onto it.
+abstract class CameraView extends ChangeNotifier {
+  double get scale;
+  Offset get offset;
+
+  Offset screenToDisplay(Offset screen) => (screen - offset) / scale;
+
+  Offset displayToScreen(Offset display) => display * scale + offset;
+}
+
+/// View transform between document display coordinates (the stacked,
+/// rotated pages) and screen coordinates.
+class PageCamera extends CameraView {
   PageCamera({
     required Size initialContentSize,
+    Size? initialFitSize,
     this.startAtActualSize = false,
     this.pageBound = false,
-  }) : _contentSize = initialContentSize;
+  })  : _contentSize = initialContentSize,
+        _fitSize = initialFitSize ?? initialContentSize;
 
   /// Whiteboards open at 100% centered instead of fit-to-page.
   final bool startAtActualSize;
 
-  /// Paged notes clamp the camera to the page bounds so leftover vertical
-  /// pan can turn pages; whiteboards keep the loose "sliver visible" clamp.
+  /// Paged notes clamp the camera to the document bounds so leftover
+  /// vertical pan can pull a new page in at the end; whiteboards keep the
+  /// loose "sliver visible" clamp.
   final bool pageBound;
 
   static const double minScale = 0.1;
@@ -26,21 +41,33 @@ class PageCamera extends ChangeNotifier {
   static const double pageMargin = 24.0;
 
   Size _contentSize;
+
+  /// What the initial zoom fits to — the first page, not the whole
+  /// document, which can be arbitrarily tall.
+  final Size _fitSize;
+
   double _scale = 1;
   Offset _offset = Offset.zero;
   Size _viewport = Size.zero;
   bool _initialized = false;
 
   Size get contentSize => _contentSize;
+
+  @override
   double get scale => _scale;
+
+  @override
   Offset get offset => _offset;
 
-  /// Page/rotation changed: keep the camera but adapt to the new size.
+  double get verticalOffset => _offset.dy;
+
+  /// Document grew or a page rotated: keep the scroll position, adapt the
+  /// bounds. (Whiteboards re-center; their content is a single page.)
   void setContentSize(Size size) {
     if (size == _contentSize) return;
     _contentSize = size;
     if (_initialized && !_viewport.isEmpty) {
-      _centerContent();
+      if (!pageBound) _centerContent();
       _clampOffset();
       notifyListeners();
     }
@@ -63,14 +90,16 @@ class PageCamera extends ChangeNotifier {
         const pad = 48.0;
         _scale = math
             .min(
-              (viewport.width - pad) / _contentSize.width,
-              (viewport.height - pad) / _contentSize.height,
+              (viewport.width - pad) / _fitSize.width,
+              (viewport.height - pad) / _fitSize.height,
             )
             .clamp(minScale, maxScale);
         _centerContent();
       }
       _initialized = true;
-    } else {
+    } else if (!pageBound) {
+      // Viewport resize: a free camera re-centers; a page-bound one keeps
+      // its scroll position and just re-clamps.
       _centerContent();
     }
     _clampOffset();
@@ -85,12 +114,8 @@ class PageCamera extends ChangeNotifier {
     );
   }
 
-  Offset screenToDisplay(Offset screen) => (screen - _offset) / _scale;
-
-  Offset displayToScreen(Offset display) => display * _scale + _offset;
-
   /// Pans and returns the part of [delta] the clamp swallowed; callers use
-  /// the leftover vertical motion to drive page turns.
+  /// the leftover vertical motion at the document end to add a page.
   Offset panBy(Offset delta) {
     final target = _offset + delta;
     _offset = target;
@@ -100,14 +125,9 @@ class PageCamera extends ChangeNotifier {
     return unconsumed;
   }
 
-  /// Lands a page turn: arriving forward shows the top of the new page,
-  /// going back shows the bottom of the previous one.
-  void snapToVerticalEdge({required bool top}) {
-    if (_viewport.isEmpty) return;
-    final h = _contentSize.height * _scale;
-    final dy = h + 2 * pageMargin <= _viewport.height
-        ? (_viewport.height - h) / 2
-        : (top ? pageMargin : _viewport.height - h - pageMargin);
+  /// Programmatic scroll (page navigation); clamped like any pan.
+  void setVerticalOffset(double dy) {
+    if (dy == _offset.dy) return;
     _offset = Offset(_offset.dx, dy);
     _clampOffset();
     notifyListeners();
@@ -122,7 +142,7 @@ class PageCamera extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Page-bound: the page never leaves its frame (fitting axes lock
+  /// Page-bound: the document never leaves its frame (fitting axes lock
   /// centered). Otherwise keeps at least a sliver of content on screen.
   void _clampOffset() {
     if (_viewport.isEmpty) return;
@@ -145,5 +165,32 @@ class PageCamera extends ChangeNotifier {
   static double _clampAxis(double offset, double extent, double viewport) {
     if (extent + 2 * pageMargin <= viewport) return (viewport - extent) / 2;
     return offset.clamp(viewport - extent - pageMargin, pageMargin);
+  }
+}
+
+/// One page's slice of the document camera: same zoom, offset shifted by
+/// the page's origin in document display coordinates. Painters bound to a
+/// portal draw in that page's local display space.
+class PagePortal extends CameraView {
+  PagePortal(this._camera) {
+    _camera.addListener(notifyListeners);
+  }
+
+  final PageCamera _camera;
+
+  /// Page top-left in document display coordinates; the layout updates
+  /// this in place each build (painters read it at paint time).
+  Offset origin = Offset.zero;
+
+  @override
+  double get scale => _camera.scale;
+
+  @override
+  Offset get offset => _camera.offset + origin * _camera.scale;
+
+  @override
+  void dispose() {
+    _camera.removeListener(notifyListeners);
+    super.dispose();
   }
 }

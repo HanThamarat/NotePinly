@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart';
+﻿import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 
 import '../../../app/theme/tokens.dart';
@@ -52,7 +52,7 @@ class OverlayPainter extends CustomPainter {
     required this.pathCache,
   }) : super(repaint: Listenable.merge([camera, interaction]));
 
-  final PageCamera camera;
+  final CameraView camera;
   final PageSpec spec;
   final CanvasInteraction interaction;
   final StrokePathCache pathCache;
