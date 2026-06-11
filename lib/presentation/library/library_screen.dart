@@ -37,14 +37,12 @@ class LibraryScreen extends StatelessWidget {
         },
         child: const Scaffold(
           backgroundColor: InkColors.backdrop,
-          body: SafeArea(
-            child: Row(
-              crossAxisAlignment: .stretch,
-              children: [
-                _Sidebar(),
-                Expanded(child: _NotesPane()),
-              ],
-            ),
+          body: Row(
+            crossAxisAlignment: .stretch,
+            children: [
+              _Sidebar(),
+              Expanded(child: _NotesPane()),
+            ],
           ),
         ),
       ),

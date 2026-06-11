@@ -42,6 +42,21 @@ class StrokePoint extends Equatable {
         timestampMs: (json['ts'] as num).toInt(),
       );
 
+  StrokePoint copyWith({
+    double? x,
+    double? y,
+    double? pressure,
+    double? tilt,
+    int? timestampMs,
+  }) =>
+      StrokePoint(
+        x: x ?? this.x,
+        y: y ?? this.y,
+        pressure: pressure ?? this.pressure,
+        tilt: tilt ?? this.tilt,
+        timestampMs: timestampMs ?? this.timestampMs,
+      );
+
   @override
   List<Object?> get props => [x, y, pressure, tilt, timestampMs];
 }

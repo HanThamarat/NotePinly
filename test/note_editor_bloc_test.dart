@@ -35,7 +35,7 @@ void main() {
     blocTest<NoteEditorBloc, NoteEditorState>(
       'committed stroke is appended and enables undo',
       build: _bloc,
-      act: (bloc) => bloc.add(EditorStrokeCommitted(_stroke('a'))),
+      act: (bloc) => bloc.add(EditorStrokeCommitted(_stroke('a'), tool: EditorTool.pen)),
       verify: (bloc) {
         expect(_strokesOf(bloc).map((s) => s.id), ['a']);
         expect(bloc.state.canUndo, isTrue);
@@ -47,7 +47,7 @@ void main() {
       'undo removes the stroke, redo restores it',
       build: _bloc,
       act: (bloc) => bloc
-        ..add(EditorStrokeCommitted(_stroke('a')))
+        ..add(EditorStrokeCommitted(_stroke('a'), tool: EditorTool.pen))
         ..add(const EditorUndoRequested())
         ..add(const EditorRedoRequested()),
       verify: (bloc) {
@@ -60,9 +60,9 @@ void main() {
       'a new stroke clears the redo stack',
       build: _bloc,
       act: (bloc) => bloc
-        ..add(EditorStrokeCommitted(_stroke('a')))
+        ..add(EditorStrokeCommitted(_stroke('a'), tool: EditorTool.pen))
         ..add(const EditorUndoRequested())
-        ..add(EditorStrokeCommitted(_stroke('b'))),
+        ..add(EditorStrokeCommitted(_stroke('b'), tool: EditorTool.pen)),
       verify: (bloc) {
         expect(_strokesOf(bloc).map((s) => s.id), ['b']);
         expect(bloc.state.canRedo, isFalse);
@@ -74,7 +74,7 @@ void main() {
       build: () => _bloc(maxHistory: 3),
       act: (bloc) {
         for (var i = 0; i < 5; i++) {
-          bloc.add(EditorStrokeCommitted(_stroke('s$i')));
+          bloc.add(EditorStrokeCommitted(_stroke('s$i'), tool: EditorTool.pen));
         }
         for (var i = 0; i < 5; i++) {
           bloc.add(const EditorUndoRequested());
@@ -92,7 +92,7 @@ void main() {
       'erase removes strokes and adds fragments as one undoable op',
       build: _bloc,
       act: (bloc) => bloc
-        ..add(EditorStrokeCommitted(_stroke('a')))
+        ..add(EditorStrokeCommitted(_stroke('a'), tool: EditorTool.pen))
         ..add(EditorStrokesErased([_stroke('a')], [_stroke('frag-1')]))
         ..add(const EditorUndoRequested()),
       verify: (bloc) {
@@ -108,7 +108,7 @@ void main() {
       'selection change carries no op (not undoable)',
       build: _bloc,
       act: (bloc) => bloc
-        ..add(EditorStrokeCommitted(_stroke('a')))
+        ..add(EditorStrokeCommitted(_stroke('a'), tool: EditorTool.pen))
         ..add(const EditorSelectionChanged({'a'})),
       verify: (bloc) {
         expect(bloc.state.selectedStrokeIds, {'a'});
@@ -121,7 +121,7 @@ void main() {
       'recolor applies to selection and undo restores old colors',
       build: _bloc,
       act: (bloc) => bloc
-        ..add(EditorStrokeCommitted(_stroke('a')))
+        ..add(EditorStrokeCommitted(_stroke('a'), tool: EditorTool.pen))
         ..add(const EditorSelectionChanged({'a'}))
         ..add(const EditorSelectionRecolored(Color(0xFFB02A2D)))
         ..add(const EditorUndoRequested()),
@@ -149,7 +149,7 @@ void main() {
           ],
         );
         bloc
-          ..add(EditorStrokeCommitted(before))
+          ..add(EditorStrokeCommitted(before, tool: EditorTool.pen))
           ..add(const EditorSelectionChanged({'a'}))
           ..add(EditorSelectionTransformed([before], [after]));
       },
@@ -163,8 +163,8 @@ void main() {
       'delete selection removes the strokes',
       build: _bloc,
       act: (bloc) => bloc
-        ..add(EditorStrokeCommitted(_stroke('a')))
-        ..add(EditorStrokeCommitted(_stroke('b')))
+        ..add(EditorStrokeCommitted(_stroke('a'), tool: EditorTool.pen))
+        ..add(EditorStrokeCommitted(_stroke('b'), tool: EditorTool.pen))
         ..add(const EditorSelectionChanged({'a'}))
         ..add(const EditorSelectionDeleted()),
       verify: (bloc) {

@@ -134,16 +134,24 @@ void main() {
       expect(c.scale, PageCamera.minScale);
     });
 
-    test('pan cannot fling the page fully off-screen', () {
+    test('pan is clamped for paged camera (cannot fling off-screen)', () {
       final c = camera();
       c.panBy(const Offset(100000, 100000));
       final pageOrigin = c.displayToScreen(Offset.zero);
       expect(pageOrigin.dx, lessThanOrEqualTo(1200));
       expect(pageOrigin.dy, lessThanOrEqualTo(800));
-      c.panBy(const Offset(-200000, -200000));
-      final pageEnd = c.displayToScreen(const Offset(800, 1000));
-      expect(pageEnd.dx, greaterThanOrEqualTo(0));
-      expect(pageEnd.dy, greaterThanOrEqualTo(0));
+    });
+
+    test('pan is broad for whiteboard camera (keeps a sliver visible)', () {
+      final c = PageCamera(
+        initialContentSize: const Size(800, 1000),
+        pageBound: false,
+      );
+      c.fitToViewport(const Size(1200, 800));
+      // Max dx is viewport (1200) - sliver (64) = 1136
+      c.panBy(const Offset(100000, 100000));
+      final pageOrigin = c.displayToScreen(Offset.zero);
+      expect(pageOrigin.dx, closeTo(1136, 0.5));
     });
 
     PageCamera pagedCamera() {

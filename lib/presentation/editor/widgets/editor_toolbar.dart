@@ -104,6 +104,12 @@ class EditorToolbar extends StatelessWidget {
                   selected: tool == EditorTool.pen,
                   onPressed: () => onToolSelected(EditorTool.pen),
                 ),
+                _ToolButton(
+                  icon: Icons.pentagon_outlined,
+                  label: 'Shapes',
+                  selected: tool == EditorTool.shape,
+                  onPressed: () => onToolSelected(EditorTool.shape),
+                ),
                 _EraserButton(
                   selected: tool == EditorTool.eraser,
                   mode: eraserMode,

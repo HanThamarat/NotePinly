@@ -318,6 +318,7 @@ class _InkCanvasState extends State<InkCanvas> {
     final tool = _forcesEraser(e) ? EditorTool.eraser : widget.tool;
     switch (tool) {
       case EditorTool.pen:
+      case EditorTool.shape:
         _drag = _DragKind.draw;
         widget.activeStroke.start(
           pagePoint: page,

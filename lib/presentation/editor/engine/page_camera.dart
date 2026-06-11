@@ -67,7 +67,6 @@ class PageCamera extends CameraView {
     if (size == _contentSize) return;
     _contentSize = size;
     if (_initialized && !_viewport.isEmpty) {
-      if (!pageBound) _centerContent();
       _clampOffset();
       notifyListeners();
     }
@@ -97,10 +96,10 @@ class PageCamera extends CameraView {
         _centerContent();
       }
       _initialized = true;
-    } else if (!pageBound) {
-      // Viewport resize: a free camera re-centers; a page-bound one keeps
-      // its scroll position and just re-clamps.
-      _centerContent();
+    } else if (pageBound) {
+      // Viewport resize: a page-bound one keeps its scroll position and
+      // just re-clamps.
+      _clampOffset();
     }
     _clampOffset();
     notifyListeners();
@@ -155,6 +154,7 @@ class PageCamera extends CameraView {
       );
       return;
     }
+    // Whiteboard: allow free panning but keep at least a sliver on screen.
     const visible = 64.0;
     _offset = Offset(
       _offset.dx.clamp(visible - w, _viewport.width - visible),
