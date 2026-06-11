@@ -1,4 +1,4 @@
-import 'dart:ui' as ui;
+﻿import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show Listenable;
 import 'package:flutter/rendering.dart';
@@ -29,7 +29,7 @@ class StrokePathCache {
   }
 }
 
-void _applyCamera(Canvas canvas, PageCamera camera) {
+void _applyCamera(Canvas canvas, CameraView camera) {
   canvas
     ..translate(camera.offset.dx, camera.offset.dy)
     ..scale(camera.scale);
@@ -48,7 +48,7 @@ class PaperPainter extends CustomPainter {
               : Listenable.merge([camera, pdfCache]),
         );
 
-  final PageCamera camera;
+  final CameraView camera;
   final PageSpec spec;
   final bool isWhiteboard;
   final PdfBackgroundCache? pdfCache;
@@ -56,7 +56,7 @@ class PaperPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     if (isWhiteboard) {
-      // The whiteboard surface is the screen itself — endless paper with
+      // The whiteboard surface is the screen itself â€” endless paper with
       // a dot grid anchored to content space, so it pans and zooms with
       // the ink.
       canvas.drawRect(Offset.zero & size, Paint()..color = InkColors.page);
@@ -97,7 +97,7 @@ class PaperPainter extends CustomPainter {
   }
 
   /// Dot grid in content coordinates, density-adapted to zoom: the
-  /// stride doubles until dots sit ≥14 screen px apart, so zooming out
+  /// stride doubles until dots sit â‰¥14 screen px apart, so zooming out
   /// coarsens the grid instead of flooding the screen.
   void _paintWhiteboardDots(Canvas canvas, Size size) {
     var spacing = 32.0;
@@ -161,7 +161,7 @@ class PaperPainter extends CustomPainter {
       oldDelegate.camera.offset != camera.offset;
 }
 
-/// Imported images — always under the ink.
+/// Imported images â€” always under the ink.
 class ImagesPainter extends CustomPainter {
   ImagesPainter({
     required this.camera,
@@ -171,12 +171,12 @@ class ImagesPainter extends CustomPainter {
     this.overrideRects = const {},
   }) : super(repaint: Listenable.merge([camera, cache]));
 
-  final PageCamera camera;
+  final CameraView camera;
   final PageSpec spec;
   final List<ImageObject> images;
   final ImageRasterCache cache;
 
-  /// Live-drag preview: image id → its current rect.
+  /// Live-drag preview: image id â†’ its current rect.
   final Map<String, Rect> overrideRects;
 
   @override
@@ -226,7 +226,7 @@ class CommittedInkPainter extends CustomPainter {
     this.clipToPage = true,
   }) : super(repaint: camera);
 
-  final PageCamera camera;
+  final CameraView camera;
   final PageSpec spec;
   final List<Stroke> strokes;
   final int revision;
@@ -260,7 +260,7 @@ class CommittedInkPainter extends CustomPainter {
       oldDelegate.camera.offset != camera.offset;
 }
 
-/// Only the in-progress pen stroke — the 120Hz hot path.
+/// Only the in-progress pen stroke â€” the 120Hz hot path.
 class ActiveStrokePainter extends CustomPainter {
   ActiveStrokePainter({
     required this.camera,
@@ -269,7 +269,7 @@ class ActiveStrokePainter extends CustomPainter {
     this.clipToPage = true,
   }) : super(repaint: Listenable.merge([camera, controller]));
 
-  final PageCamera camera;
+  final CameraView camera;
   final PageSpec spec;
   final ActiveStrokeController controller;
   final bool clipToPage;
@@ -305,7 +305,7 @@ class ActiveStrokePainter extends CustomPainter {
   bool shouldRepaint(ActiveStrokePainter oldDelegate) => true;
 }
 
-/// Renders one page (paper + images + ink) into a picture — shared by
+/// Renders one page (paper + images + ink) into a picture â€” shared by
 /// the thumbnail generator so thumbnails use production geometry.
 ui.Picture renderPageToPicture({
   required PageSpec spec,

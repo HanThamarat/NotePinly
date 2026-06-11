@@ -236,6 +236,26 @@ void main() {
     await capture(tester, 'editor_second_page');
   });
 
+  preview('editor — continuous scroll across the page boundary', (tester) async {
+    await pumpEditor(tester);
+    await writeSample(tester);
+    await tester.tap(find.descendant(
+      of: find.byType(PageChip),
+      matching: find.byIcon(Icons.add_rounded),
+    ));
+    await tester.pump();
+    await tester.pumpAndSettle();
+    // Wheel-scroll back up: both pages share the viewport and the
+    // current-page indicator follows the page at the center.
+    final wheel = TestPointer(7, PointerDeviceKind.mouse);
+    wheel.hover(const Offset(683, 500));
+    await tester.sendEventToBinding(wheel.scroll(const Offset(0, -800)));
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('1 of 2'), findsOneWidget);
+    await capture(tester, 'editor_continuous_scroll');
+  });
+
   preview('whiteboard — unbounded canvas at 100%', (tester) async {
     // Real file IO must run outside the FakeAsync test zone.
     final meta = await tester.runAsync(

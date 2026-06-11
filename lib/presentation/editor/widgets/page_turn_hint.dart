@@ -3,49 +3,31 @@ import 'package:flutter/material.dart';
 
 import '../../../app/theme/tokens.dart';
 
-/// Floating pill that previews a scroll page-turn: "Next page",
-/// "New page" (past the last page) or "Previous page". Driven by the
-/// canvas overscroll progress (-1..1, positive = forward); it fades and
-/// slides in as the user keeps pulling.
+/// Floating "New page" pill shown while the user keeps pulling up at the
+/// end of the document. Driven by the canvas overscroll progress (0..1);
+/// it fades and slides in as the pull charges.
 class PageTurnHint extends StatelessWidget {
-  const PageTurnHint({
-    super.key,
-    required this.progress,
-    required this.hasNextPage,
-    required this.hasPreviousPage,
-  });
+  const PageTurnHint({super.key, required this.progress});
 
   final ValueListenable<double> progress;
-  final bool hasNextPage;
-  final bool hasPreviousPage;
 
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<double>(
       valueListenable: progress,
       builder: (context, value, _) {
-        if (value == 0) return const SizedBox.shrink();
-        final forward = value > 0;
-        if (!forward && !hasPreviousPage) return const SizedBox.shrink();
-        final t = Curves.easeOut.transform(value.abs().clamp(0.0, 1.0));
-        final label = forward
-            ? (hasNextPage ? 'Next page' : 'New page')
-            : 'Previous page';
-        final icon = forward
-            ? (hasNextPage
-                ? Icons.arrow_downward_rounded
-                : Icons.add_rounded)
-            : Icons.arrow_upward_rounded;
+        if (value <= 0) return const SizedBox.shrink();
+        final t = Curves.easeOut.transform(value.clamp(0.0, 1.0));
         return Align(
-          alignment: forward ? Alignment.bottomCenter : Alignment.topCenter,
+          alignment: Alignment.bottomCenter,
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 72),
             child: Opacity(
               opacity: t,
               child: Transform.translate(
-                offset: Offset(0, (1 - t) * 14 * (forward ? 1 : -1)),
+                offset: Offset(0, (1 - t) * 14),
                 child: Material(
-                  color: t >= 1 ? InkColors.primary : Colors.white,
+                  color: Colors.white,
                   elevation: 4,
                   shadowColor: const Color(0x26253237),
                   borderRadius: BorderRadius.circular(20),
@@ -54,18 +36,16 @@ class PageTurnHint extends StatelessWidget {
                         horizontal: InkSpace.lg, vertical: InkSpace.sm),
                     child: Row(
                       mainAxisSize: .min,
-                      children: [
-                        Icon(icon,
-                            size: 17,
-                            color:
-                                t >= 1 ? Colors.white : InkColors.inkMuted),
-                        const SizedBox(width: InkSpace.sm),
+                      children: const [
+                        Icon(Icons.add_rounded,
+                            size: 17, color: InkColors.inkMuted),
+                        SizedBox(width: InkSpace.sm),
                         Text(
-                          label,
+                          'New page',
                           style: TextStyle(
                             fontSize: 13.5,
                             fontWeight: FontWeight.w500,
-                            color: t >= 1 ? Colors.white : InkColors.ink,
+                            color: InkColors.ink,
                           ),
                         ),
                       ],

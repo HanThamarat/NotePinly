@@ -9,6 +9,7 @@ import '../../../domain/entities/image_object.dart';
 import '../../../domain/entities/note_document.dart';
 import '../../../domain/entities/stroke.dart';
 import '../engine/active_stroke_controller.dart';
+import '../engine/document_layout.dart';
 import '../engine/eraser_engine.dart';
 import '../engine/image_raster_cache.dart';
 import '../engine/lasso_engine.dart';
@@ -29,9 +30,11 @@ enum _DragKind {
   scaleImage,
 }
 
-/// The drawing surface: pointer routing for every tool, palm rejection,
-/// and the five paint layers (paper, images, committed ink, active
-/// stroke, overlay).
+/// The drawing surface: every page of the note stacked in one continuous
+/// vertical scroll (GoodNotes-style), pointer routing for every tool,
+/// palm rejection, and the paint layers per visible page (paper, images,
+/// committed ink) plus the active stroke and overlay on the page being
+/// touched.
 ///
 /// Input contract (PRODUCT.md principle 5):
 /// - Stylus always operates the active tool; first stylus contact flips
@@ -40,12 +43,20 @@ enum _DragKind {
 ///   (a young one-finger action is cancelled when the second lands).
 /// - In stylus mode: one finger pans, two fingers pan/zoom.
 /// - Inverted stylus or the S Pen barrel button force the eraser.
+///
+/// Tool gestures land on whichever page is under the pointer; the canvas
+/// reports that page through [onCurrentPageChanged] before committing
+/// ops, so the bloc routes them to the right page. Scrolling keeps the
+/// "current page" on whatever sits at the viewport center, and pulling
+/// up past the last page requests a new one ([onAddPageRequested]).
 class InkCanvas extends StatefulWidget {
   const InkCanvas({
     super.key,
     required this.camera,
     required this.activeStroke,
-    required this.page,
+    required this.pages,
+    required this.pageIndex,
+    required this.layout,
     required this.revision,
     required this.tool,
     required this.penColor,
@@ -63,16 +74,20 @@ class InkCanvas extends StatefulWidget {
     this.isWhiteboard = false,
     this.pdfCache,
     this.onZoomChanged,
-    this.hasNextPage = false,
-    this.hasPreviousPage = false,
     this.canAddPage = false,
-    this.onPageSwitchRequested,
+    this.onCurrentPageChanged,
+    this.onAddPageRequested,
     this.onOverscrollChanged,
   });
 
   final PageCamera camera;
   final ActiveStrokeController activeStroke;
-  final NotePage page;
+  final List<NotePage> pages;
+
+  /// The bloc's current page — selection and page-level actions live here.
+  final int pageIndex;
+
+  final DocumentLayout layout;
   final int revision;
   final EditorTool tool;
   final Color penColor;
@@ -94,16 +109,18 @@ class InkCanvas extends StatefulWidget {
       onImageTransformed;
   final ValueChanged<double>? onZoomChanged;
 
-  /// Page-turn-by-scroll (GoodNotes style). Vertical pan left over at the
-  /// page edge accumulates; past a threshold [onPageSwitchRequested] fires
-  /// with +1 (next / new page) or -1 (previous page).
-  final bool hasNextPage;
-  final bool hasPreviousPage;
+  /// Pull-past-the-end page creation. Vertical pan left over at the
+  /// document bottom accumulates; past a threshold [onAddPageRequested]
+  /// fires.
   final bool canAddPage;
-  final ValueChanged<int>? onPageSwitchRequested;
+  final VoidCallback? onAddPageRequested;
 
-  /// Progress toward a page turn in -1..1 (positive = forward); drives the
-  /// hint chip the editor screen overlays.
+  /// Fired when a tool gesture starts on a different page, and when
+  /// scrolling moves another page into the viewport center.
+  final ValueChanged<int>? onCurrentPageChanged;
+
+  /// Progress toward adding a page in 0..1; drives the hint chip the
+  /// editor screen overlays.
   final ValueChanged<double>? onOverscrollChanged;
 
   @override
@@ -113,6 +130,7 @@ class InkCanvas extends StatefulWidget {
 class _InkCanvasState extends State<InkCanvas> {
   final _pathCache = StrokePathCache();
   final _interaction = CanvasInteraction();
+  final _portals = <int, PagePortal>{};
 
   bool _stylusSeen = false;
   int? _primaryPointer;
@@ -121,6 +139,7 @@ class _InkCanvasState extends State<InkCanvas> {
   int _idSeq = 0;
 
   _DragKind _drag = _DragKind.none;
+  int? _gesturePageIndex;
   EraserSession? _eraserSession;
   Offset _dragStartPage = Offset.zero;
   Offset _scalePivot = Offset.zero;
@@ -142,41 +161,65 @@ class _InkCanvasState extends State<InkCanvas> {
   double? _gestureStartSpan;
   bool _pinching = false;
 
-  /// Leftover vertical pan at the page edge; ±[_pageTurnThreshold] turns
-  /// the page. Negative = content pushed up = toward the next page.
-  static const _pageTurnThreshold = 90.0;
+  /// Leftover upward pan at the document end; past [_addPageThreshold]
+  /// a new page is requested.
+  static const _addPageThreshold = 90.0;
   double _overscroll = 0;
   bool _overscrollArmed = true;
   DateTime _lastWheelAt = DateTime.fromMillisecondsSinceEpoch(0);
+  int _lastReportedPage = -1;
 
-  PageTransform get _transform => PageTransform(widget.page.spec);
+  int get _currentPageIndex =>
+      widget.pageIndex.clamp(0, widget.pages.length - 1);
+
+  NotePage get _currentPage => widget.pages[_currentPageIndex];
+
+  /// The page the active stroke / interaction overlay belong to.
+  int get _overlayPageIndex => _gesturePageIndex ?? _currentPageIndex;
+
+  NotePage _pageAt(int index) => widget.pages[index];
+
+  PagePortal _portalFor(int index) =>
+      (_portals.putIfAbsent(index, () => PagePortal(widget.camera)))
+        ..origin = widget.layout.pageRects[index].topLeft;
 
   @override
   void didUpdateWidget(InkCanvas oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.revision != widget.revision) {
-      _pathCache.retainOnly(widget.page.strokes);
+      _pathCache
+          .retainOnly([for (final p in widget.pages) ...p.strokes]);
     }
-    if (oldWidget.page.spec != widget.page.spec) {
-      widget.camera.setContentSize(_transform.displaySize);
+    if (widget.pages.length < oldWidget.pages.length) {
+      _portals.removeWhere((index, portal) {
+        if (index >= widget.pages.length) {
+          portal.dispose();
+          return true;
+        }
+        return false;
+      });
     }
     _syncSelectionVisuals();
   }
 
   @override
   void dispose() {
+    for (final portal in _portals.values) {
+      portal.dispose();
+    }
     _interaction.dispose();
     super.dispose();
   }
 
   void _syncSelectionVisuals() {
+    final page = _currentPage;
     final selected = [
-      for (final s in widget.page.strokes)
+      for (final s in page.strokes)
         if (widget.selectedStrokeIds.contains(s.id)) s
     ];
     _interaction.selectionBounds = LassoEngine.selectionBounds(selected);
     ImageObject? image;
-    for (final i in widget.page.images) {
+    for (final i in page.images) {
       if (i.id == widget.selectedImageId) image = i;
     }
     _interaction.imageBounds = image?.rect;
@@ -186,8 +229,22 @@ class _InkCanvasState extends State<InkCanvas> {
   String _nextId() =>
       '${DateTime.now().microsecondsSinceEpoch}-${_idSeq++}';
 
-  Offset _toPage(Offset local) =>
-      _transform.displayToPage(widget.camera.screenToDisplay(local));
+  // --- Coordinate mapping ---
+
+  /// Page under the pointer, or -1 in gaps and backdrop.
+  int _pageIndexAt(Offset local) {
+    if (widget.isWhiteboard) return 0;
+    return widget.layout.pageAt(widget.camera.screenToDisplay(local));
+  }
+
+  Offset _toPageCoords(int pageIndex, Offset local) {
+    final display = widget.camera.screenToDisplay(local) -
+        widget.layout.pageRects[pageIndex].topLeft;
+    return PageTransform(_pageAt(pageIndex).spec).displayToPage(display);
+  }
+
+  Offset _gesturePoint(Offset local) =>
+      _toPageCoords(_gesturePageIndex ?? _currentPageIndex, local);
 
   // --- Pointer routing ---
 
@@ -215,7 +272,8 @@ class _InkCanvasState extends State<InkCanvas> {
       _touches[e.pointer] = e.localPosition;
       if (_touches.length == 1) {
         if (!_stylusSeen && _primaryPointer == null) {
-          _beginPrimary(e, withTouch: true);
+          // A finger on the backdrop scrolls instead of drawing.
+          if (!_beginPrimary(e, withTouch: true)) _resetGestureBaseline();
         } else {
           _resetGestureBaseline();
         }
@@ -262,11 +320,20 @@ class _InkCanvasState extends State<InkCanvas> {
 
   // --- Primary (tool) action ---
 
-  void _beginPrimary(PointerDownEvent e, {required bool withTouch}) {
+  /// Returns false when the pointer landed outside every page; the
+  /// gesture then falls through to scrolling.
+  bool _beginPrimary(PointerDownEvent e, {required bool withTouch}) {
+    final pageIndex = _pageIndexAt(e.localPosition);
+    if (pageIndex < 0) return false;
+    if (pageIndex != _currentPageIndex) {
+      // Route the bloc to the touched page before any op is committed.
+      widget.onCurrentPageChanged?.call(pageIndex);
+    }
+    setState(() => _gesturePageIndex = pageIndex);
     _primaryPointer = e.pointer;
     _primaryIsTouch = withTouch;
     _dragStartedAt = e.timeStamp;
-    final page = _toPage(e.localPosition);
+    final page = _toPageCoords(pageIndex, e.localPosition);
 
     final tool = _forcesEraser(e) ? EditorTool.eraser : widget.tool;
     switch (tool) {
@@ -285,65 +352,70 @@ class _InkCanvasState extends State<InkCanvas> {
         _eraserSession = EraserSession(
           mode: widget.eraserMode,
           radius: widget.eraserRadius,
-          strokes: widget.page.strokes,
+          strokes: _pageAt(pageIndex).strokes,
           nextId: _nextId,
         );
         _interaction.update(() {
           _interaction.eraserVisible = true;
-          _interaction.eraserCursor = widget.camera.screenToDisplay(e.localPosition);
+          _interaction.eraserCursor =
+              _portalFor(pageIndex).screenToDisplay(e.localPosition);
         });
         if (_eraserSession!.eraseAt(page)) setState(() {});
       case EditorTool.lasso:
-        _beginLassoInteraction(page);
+        _beginLassoInteraction(page, pageIndex);
     }
+    return true;
   }
 
-  void _beginLassoInteraction(Offset page) {
+  void _beginLassoInteraction(Offset page, int pageIndex) {
     final onePx = 1 / widget.camera.scale;
     final grab = selectionHandleRadius * onePx * 2.2;
 
-    // Scale handles on a stroke selection.
-    final bounds = _interaction.selectionBounds;
-    if (bounds != null) {
-      final outer = bounds.inflate(6 * onePx);
-      final corners = handlePositions(outer);
-      for (var i = 0; i < corners.length; i++) {
-        if ((corners[i] - page).distance <= grab) {
-          _startSelectionDrag(_DragKind.scaleSelection, page,
-              pivot: corners[(i + 2) % 4]);
+    // Selection handles only exist on the bloc's current page.
+    if (pageIndex == _currentPageIndex) {
+      // Scale handles on a stroke selection.
+      final bounds = _interaction.selectionBounds;
+      if (bounds != null) {
+        final outer = bounds.inflate(6 * onePx);
+        final corners = handlePositions(outer);
+        for (var i = 0; i < corners.length; i++) {
+          if ((corners[i] - page).distance <= grab) {
+            _startSelectionDrag(_DragKind.scaleSelection, page,
+                pivot: corners[(i + 2) % 4]);
+            return;
+          }
+        }
+        if (outer.contains(page)) {
+          _startSelectionDrag(_DragKind.moveSelection, page,
+              pivot: bounds.center);
           return;
         }
       }
-      if (outer.contains(page)) {
-        _startSelectionDrag(_DragKind.moveSelection, page,
-            pivot: bounds.center);
-        return;
-      }
-    }
 
-    // Handles / body of a selected image.
-    final imageRect = _interaction.imageBounds;
-    if (imageRect != null && widget.selectedImageId != null) {
-      final outer = imageRect.inflate(6 * onePx);
-      final corners = handlePositions(outer);
-      for (var i = 0; i < corners.length; i++) {
-        if ((corners[i] - page).distance <= grab) {
-          _drag = _DragKind.scaleImage;
-          _imageHandle = i;
-          _imageBefore = widget.page.images
+      // Handles / body of a selected image.
+      final imageRect = _interaction.imageBounds;
+      if (imageRect != null && widget.selectedImageId != null) {
+        final outer = imageRect.inflate(6 * onePx);
+        final corners = handlePositions(outer);
+        for (var i = 0; i < corners.length; i++) {
+          if ((corners[i] - page).distance <= grab) {
+            _drag = _DragKind.scaleImage;
+            _imageHandle = i;
+            _imageBefore = _currentPage.images
+                .firstWhere((img) => img.id == widget.selectedImageId);
+            _imageDragRect = _imageBefore!.rect;
+            _dragStartPage = page;
+            return;
+          }
+        }
+        if (outer.contains(page)) {
+          _drag = _DragKind.moveImage;
+          _imageBefore = _currentPage.images
               .firstWhere((img) => img.id == widget.selectedImageId);
           _imageDragRect = _imageBefore!.rect;
           _dragStartPage = page;
           return;
         }
-      }
-      if (outer.contains(page)) {
-        _drag = _DragKind.moveImage;
-        _imageBefore = widget.page.images
-            .firstWhere((img) => img.id == widget.selectedImageId);
-        _imageDragRect = _imageBefore!.rect;
-        _dragStartPage = page;
-        return;
       }
     }
 
@@ -359,7 +431,7 @@ class _InkCanvasState extends State<InkCanvas> {
     _scalePivot = pivot;
     _scaleStartDistance = math.max((page - pivot).distance, 1e-3);
     _dragBaseStrokes = [
-      for (final s in widget.page.strokes)
+      for (final s in _currentPage.strokes)
         if (widget.selectedStrokeIds.contains(s.id)) s
     ];
     setState(() => _hiddenIds = {for (final s in _dragBaseStrokes) s.id});
@@ -372,7 +444,7 @@ class _InkCanvasState extends State<InkCanvas> {
   }
 
   void _movePrimary(PointerMoveEvent e) {
-    final page = _toPage(e.localPosition);
+    final page = _gesturePoint(e.localPosition);
     switch (_drag) {
       case _DragKind.draw:
         widget.activeStroke.addSample(
@@ -383,7 +455,7 @@ class _InkCanvasState extends State<InkCanvas> {
         );
       case _DragKind.erase:
         _interaction.update(() => _interaction.eraserCursor =
-            widget.camera.screenToDisplay(e.localPosition));
+            _portalFor(_overlayPageIndex).screenToDisplay(e.localPosition));
         if (_eraserSession?.eraseAt(page) ?? false) setState(() {});
       case _DragKind.lasso:
         _interaction.update(() => _interaction.lassoPoints.add(page));
@@ -469,9 +541,11 @@ class _InkCanvasState extends State<InkCanvas> {
     _drag = _DragKind.none;
     _primaryPointer = null;
     _primaryIsTouch = false;
+    setState(() => _gesturePageIndex = null);
   }
 
   void _finishLasso(Offset localPosition) {
+    final lassoPage = _overlayPageIndex;
     final pts = _interaction.lassoPoints;
     Rect extent = Rect.zero;
     if (pts.isNotEmpty) {
@@ -483,9 +557,9 @@ class _InkCanvasState extends State<InkCanvas> {
     final isTap = extent.longestSide < 6;
     if (isTap) {
       // Tap: select the topmost image under the finger, or clear.
-      final page = _toPage(localPosition);
+      final page = _gesturePoint(localPosition);
       String? imageId;
-      for (final img in widget.page.images.reversed) {
+      for (final img in _pageAt(lassoPage).images.reversed) {
         if (img.rect.contains(page)) {
           imageId = img.id;
           break;
@@ -495,8 +569,8 @@ class _InkCanvasState extends State<InkCanvas> {
     } else {
       final result = LassoEngine.select(
         polygon: pts,
-        strokes: widget.page.strokes,
-        images: widget.page.images,
+        strokes: _pageAt(lassoPage).strokes,
+        images: _pageAt(lassoPage).images,
       );
       widget.onSelectionChanged(result.strokeIds, result.imageId);
     }
@@ -529,6 +603,7 @@ class _InkCanvasState extends State<InkCanvas> {
     _drag = _DragKind.none;
     _primaryPointer = null;
     _primaryIsTouch = false;
+    setState(() => _gesturePageIndex = null);
   }
 
   double _normalizedPressure(PointerEvent e) {
@@ -537,42 +612,35 @@ class _InkCanvasState extends State<InkCanvas> {
     return ((e.pressure - e.pressureMin) / range).clamp(0.0, 1.0);
   }
 
-  // --- Page-turn overscroll ---
+  // --- Pull-past-the-end page creation ---
 
-  bool get _pagingEnabled =>
-      !widget.isWhiteboard && widget.onPageSwitchRequested != null;
-
-  bool _canPage(int direction) => direction > 0
-      ? widget.hasNextPage || widget.canAddPage
-      : widget.hasPreviousPage;
+  bool get _pagingEnabled => !widget.isWhiteboard &&
+      widget.canAddPage &&
+      widget.onAddPageRequested != null;
 
   void _setOverscroll(double value) {
     if (value == _overscroll) return;
     _overscroll = value;
     widget.onOverscrollChanged
-        ?.call((-_overscroll / _pageTurnThreshold).clamp(-1.0, 1.0));
+        ?.call((-_overscroll / _addPageThreshold).clamp(0.0, 1.0));
   }
 
   /// [unconsumed] is what the camera clamp refused. Any actual scroll
-  /// resets the gauge; pure overscroll in a turnable direction charges it.
+  /// resets the gauge; pure upward overscroll (at the document end)
+  /// charges it.
   void _trackOverscroll(Offset requested, Offset unconsumed) {
     if (!_pagingEnabled) return;
-    if ((requested.dy - unconsumed.dy).abs() > 0.5) {
+    if ((requested.dy - unconsumed.dy).abs() > 0.5 || unconsumed.dy > 0) {
       _setOverscroll(0);
       return;
     }
     if (!_overscrollArmed) return;
     final next = _overscroll + unconsumed.dy;
-    if (!_canPage(next < 0 ? 1 : -1)) {
-      _setOverscroll(0);
-      return;
-    }
     _setOverscroll(next);
-    if (next.abs() < _pageTurnThreshold) return;
-    final direction = next < 0 ? 1 : -1;
+    if (next > -_addPageThreshold) return;
     _overscrollArmed = false;
     _setOverscroll(0);
-    widget.onPageSwitchRequested!(direction);
+    widget.onAddPageRequested!();
   }
 
   // --- Two-finger pan/zoom ---
@@ -621,7 +689,7 @@ class _InkCanvasState extends State<InkCanvas> {
     if (prevFocal != null) {
       final delta = focal - prevFocal;
       final unconsumed = widget.camera.panBy(delta);
-      // A pinch jiggles the focal point; never charge a page turn from it.
+      // A pinch jiggles the focal point; never charge a new page from it.
       if (_pinching) {
         _setOverscroll(0);
       } else {
@@ -632,9 +700,9 @@ class _InkCanvasState extends State<InkCanvas> {
     _gestureSpan = span;
   }
 
-  /// Desktop mouse wheel / trackpad: scrolls the page, and keeps scrolling
-  /// past the edge to turn it. Momentum can't chain page turns — the gauge
-  /// re-arms only after half a second of wheel silence.
+  /// Desktop mouse wheel / trackpad: scrolls the document, and keeps
+  /// scrolling past the end to add a page. Momentum can't chain page
+  /// adds — the gauge re-arms only after half a second of wheel silence.
   void _onPointerSignal(PointerSignalEvent e) {
     if (e is! PointerScrollEvent) return;
     final now = DateTime.now();
@@ -648,22 +716,33 @@ class _InkCanvasState extends State<InkCanvas> {
     _trackOverscroll(delta, unconsumed);
   }
 
+  // --- Current-page tracking while scrolling ---
+
+  void _reportVisiblePage(Size viewport) {
+    if (widget.isWhiteboard || widget.onCurrentPageChanged == null) return;
+    final centerY =
+        widget.camera.screenToDisplay(Offset(0, viewport.height / 2)).dy;
+    final index = widget.layout.nearestPageTo(centerY);
+    if (index == _lastReportedPage) return;
+    _lastReportedPage = index;
+    if (index != _currentPageIndex && _gesturePageIndex == null) {
+      // Deferred: this runs during build (the camera notifies painters).
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onCurrentPageChanged!(index);
+      });
+    }
+  }
+
+  // --- Rendering ---
+
   @override
   Widget build(BuildContext context) {
     _syncSelectionVisuals();
-    final spec = widget.page.spec;
-    final strokes =
-        _eraserSession?.visibleStrokes ?? widget.page.strokes;
-    final imageOverrides = <String, Rect>{
-      if (_imageDragRect != null && _imageBefore != null)
-        _imageBefore!.id: _imageDragRect!,
-    };
-
     return LayoutBuilder(
       builder: (context, constraints) {
-        widget.camera.fitToViewport(
-          Size(constraints.maxWidth, math.max(constraints.maxHeight, 1)),
-        );
+        final viewport =
+            Size(constraints.maxWidth, math.max(constraints.maxHeight, 1));
+        widget.camera.fitToViewport(viewport);
         return Listener(
           onPointerDown: _onPointerDown,
           onPointerMove: _onPointerMove,
@@ -672,68 +751,103 @@ class _InkCanvasState extends State<InkCanvas> {
           onPointerSignal: _onPointerSignal,
           behavior: HitTestBehavior.opaque,
           child: ClipRect(
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                RepaintBoundary(
-                  child: CustomPaint(
-                    painter: PaperPainter(
-                      camera: widget.camera,
-                      spec: spec,
-                      isWhiteboard: widget.isWhiteboard,
-                      pdfCache: widget.pdfCache,
-                    ),
-                  ),
-                ),
-                RepaintBoundary(
-                  child: CustomPaint(
-                    painter: ImagesPainter(
-                      camera: widget.camera,
-                      spec: spec,
-                      images: widget.page.images,
-                      cache: widget.imageCache,
-                      overrideRects: imageOverrides,
-                    ),
-                  ),
-                ),
-                RepaintBoundary(
-                  child: CustomPaint(
-                    painter: CommittedInkPainter(
-                      camera: widget.camera,
-                      spec: spec,
-                      strokes: strokes,
-                      revision: widget.revision,
-                      cache: _pathCache,
-                      hiddenIds: _hiddenIds,
-                      clipToPage: !widget.isWhiteboard,
-                    ),
-                  ),
-                ),
-                RepaintBoundary(
-                  child: CustomPaint(
-                    painter: ActiveStrokePainter(
-                      camera: widget.camera,
-                      spec: spec,
-                      controller: widget.activeStroke,
-                      clipToPage: !widget.isWhiteboard,
-                    ),
-                  ),
-                ),
-                RepaintBoundary(
-                  child: CustomPaint(
-                    painter: OverlayPainter(
-                      camera: widget.camera,
-                      spec: spec,
-                      interaction: _interaction,
-                      pathCache: _pathCache,
-                    ),
-                  ),
-                ),
-              ],
+            // Visible-page selection depends on the camera, so the layer
+            // list rebuilds with it (painters repaint through it anyway).
+            child: ListenableBuilder(
+              listenable: widget.camera,
+              builder: (context, _) => Stack(
+                fit: StackFit.expand,
+                children: _buildLayers(viewport),
+              ),
             ),
           ),
         );
       },
     );
+  }
+
+  List<Widget> _buildLayers(Size viewport) {
+    _reportVisiblePage(viewport);
+    final overlayPage = _overlayPageIndex;
+    final imageOverrides = <String, Rect>{
+      if (_imageDragRect != null && _imageBefore != null)
+        _imageBefore!.id: _imageDragRect!,
+    };
+
+    var (first, last) = (0, 0);
+    if (!widget.isWhiteboard) {
+      final topY = widget.camera.screenToDisplay(Offset.zero).dy;
+      final bottomY =
+          widget.camera.screenToDisplay(Offset(0, viewport.height)).dy;
+      (first, last) = widget.layout.visibleRange(topY, bottomY);
+    }
+
+    final layers = <Widget>[];
+    for (var i = first; i <= last && i < widget.pages.length; i++) {
+      final page = _pageAt(i);
+      final portal = _portalFor(i);
+      layers.add(RepaintBoundary(
+        child: CustomPaint(
+          painter: PaperPainter(
+            camera: portal,
+            spec: page.spec,
+            isWhiteboard: widget.isWhiteboard,
+            pdfCache: widget.pdfCache,
+          ),
+        ),
+      ));
+      layers.add(RepaintBoundary(
+        child: CustomPaint(
+          painter: ImagesPainter(
+            camera: portal,
+            spec: page.spec,
+            images: page.images,
+            cache: widget.imageCache,
+            overrideRects: i == overlayPage ? imageOverrides : const {},
+          ),
+        ),
+      ));
+      layers.add(RepaintBoundary(
+        child: CustomPaint(
+          painter: CommittedInkPainter(
+            camera: portal,
+            spec: page.spec,
+            strokes: i == _gesturePageIndex
+                ? (_eraserSession?.visibleStrokes ?? page.strokes)
+                : page.strokes,
+            revision: widget.revision,
+            cache: _pathCache,
+            hiddenIds: i == overlayPage ? _hiddenIds : const {},
+            clipToPage: !widget.isWhiteboard,
+          ),
+        ),
+      ));
+    }
+
+    if (overlayPage < widget.pages.length) {
+      final spec = _pageAt(overlayPage).spec;
+      final portal = _portalFor(overlayPage);
+      layers.add(RepaintBoundary(
+        child: CustomPaint(
+          painter: ActiveStrokePainter(
+            camera: portal,
+            spec: spec,
+            controller: widget.activeStroke,
+            clipToPage: !widget.isWhiteboard,
+          ),
+        ),
+      ));
+      layers.add(RepaintBoundary(
+        child: CustomPaint(
+          painter: OverlayPainter(
+            camera: portal,
+            spec: spec,
+            interaction: _interaction,
+            pathCache: _pathCache,
+          ),
+        ),
+      ));
+    }
+    return layers;
   }
 }

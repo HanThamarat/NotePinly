@@ -16,6 +16,7 @@ import 'bloc/note_editor_bloc.dart';
 import 'bloc/toolbar_cubit.dart';
 import 'canvas/ink_canvas.dart';
 import 'engine/active_stroke_controller.dart';
+import 'engine/document_layout.dart';
 import 'engine/image_raster_cache.dart';
 import 'engine/page_camera.dart';
 import 'engine/pdf_background_cache.dart';
@@ -48,7 +49,7 @@ class NoteEditorScreen extends StatefulWidget {
 }
 
 class _NoteEditorScreenState extends State<NoteEditorScreen>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   final _activeStroke = ActiveStrokeController();
   final _imageCache = ImageRasterCache();
   final _zoomScale = ValueNotifier<double?>(null);
@@ -56,10 +57,12 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
   PageCamera? _camera;
   PdfBackgroundCache? _pdfCache;
   NoteEditorBloc? _bloc;
+  DocumentLayout _layout = DocumentLayout(const []);
 
-  /// Direction of the last page change; orients the slide transition.
-  int _slideDirection = 1;
-  int _lastPageIndex = 0;
+  /// Animated scroll for page navigation (chip arrows, new page).
+  late final AnimationController _scrollAnimation;
+  double _scrollBegin = 0;
+  double _scrollTarget = 0;
 
   NoteRepository? get _repository {
     try {
@@ -81,6 +84,10 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _scrollAnimation = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 350),
+    )..addListener(_onScrollTick);
   }
 
   @override
@@ -95,6 +102,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _scrollAnimation.dispose();
     _activeStroke.dispose();
     _imageCache.dispose();
     _zoomScale.dispose();
@@ -104,17 +112,54 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
     super.dispose();
   }
 
-  PageCamera _cameraFor(NoteDocument doc, int pageIndex) {
-    final page = doc.pages[pageIndex];
+  PageCamera _cameraFor(NoteDocument doc) {
+    _layout = DocumentLayout(doc.pages);
+    final first = doc.pages.first.spec;
     final camera = _camera ??= PageCamera(
-      initialContentSize:
-          Size(page.spec.displayWidth, page.spec.displayHeight),
+      initialContentSize: _layout.size,
+      initialFitSize: Size(first.displayWidth, first.displayHeight),
       startAtActualSize: doc.kind == NoteKind.whiteboard,
       pageBound: doc.kind != NoteKind.whiteboard,
     );
-    camera.setContentSize(
-        Size(page.spec.displayWidth, page.spec.displayHeight));
+    camera.setContentSize(_layout.size);
     return camera;
+  }
+
+  // --- Page navigation: animated scroll through the document ---
+
+  void _onScrollTick() {
+    final t = Curves.easeInOutCubic.transform(_scrollAnimation.value);
+    _camera?.setVerticalOffset(ui.lerpDouble(_scrollBegin, _scrollTarget, t)!);
+  }
+
+  /// Scrolls the document so [index]'s page top sits under the toolbar.
+  void _scrollToPage(int index) {
+    final camera = _camera;
+    final doc = _bloc?.state.document;
+    if (camera == null || doc == null || doc.pages.isEmpty) return;
+    final layout = DocumentLayout(doc.pages);
+    final rect = layout.pageRects[index.clamp(0, doc.pages.length - 1)];
+    _scrollBegin = camera.verticalOffset;
+    _scrollTarget = PageCamera.pageMargin - rect.top * camera.scale;
+    _scrollAnimation
+      ..stop()
+      ..forward(from: 0);
+  }
+
+  /// Chip navigation: update the bloc and glide to the page.
+  void _goToPage(NoteEditorBloc bloc, int index) {
+    bloc.add(EditorPageChanged(index));
+    _scrollToPage(index);
+  }
+
+  /// Pull-past-the-end: append a page (the bloc inserts after the current
+  /// page, so route to the last page first).
+  void _addPageAtEnd(NoteEditorBloc bloc) {
+    final doc = bloc.state.document;
+    if (doc == null) return;
+    final last = doc.pages.length - 1;
+    if (bloc.state.pageIndex != last) bloc.add(EditorPageChanged(last));
+    bloc.add(const EditorPageAdded());
   }
 
   PdfBackgroundCache? _pdfCacheFor(NoteDocument doc) {
@@ -151,23 +196,6 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
       width: w,
       height: h,
     )));
-  }
-
-  /// Overscroll page turn: forward past the last page adds a new one
-  /// (GoodNotes behavior); otherwise just navigate.
-  void _handlePageSwitch(NoteEditorBloc bloc, int direction) {
-    final state = bloc.state;
-    final doc = state.document;
-    if (doc == null) return;
-    if (direction > 0) {
-      if (state.pageIndex >= doc.pages.length - 1) {
-        bloc.add(const EditorPageAdded());
-      } else {
-        bloc.add(EditorPageChanged(state.pageIndex + 1));
-      }
-    } else if (state.pageIndex > 0) {
-      bloc.add(EditorPageChanged(state.pageIndex - 1));
-    }
   }
 
   static Future<({ui.Image decoded, List<int> bytes})?> _pickWithImagePicker(
@@ -228,14 +256,19 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
         BlocProvider(create: (_) => ToolbarCubit()),
       ],
       child: BlocConsumer<NoteEditorBloc, NoteEditorState>(
-        listenWhen: (prev, next) => prev.pageIndex != next.pageIndex,
+        listenWhen: (prev, next) =>
+            prev.document != null &&
+            next.document != null &&
+            prev.document!.pages.length < next.document!.pages.length,
         listener: (context, state) {
-          final forward = state.pageIndex >= _lastPageIndex;
-          _slideDirection = forward ? 1 : -1;
-          _lastPageIndex = state.pageIndex;
           _pageTurnProgress.value = 0;
-          // Land at the top when moving forward, the bottom when going back.
-          _camera?.snapToVerticalEdge(top: forward);
+          // A page was inserted after the current one — glide down to it
+          // once the new layout has been built.
+          final target = (state.pageIndex + 1)
+              .clamp(0, state.document!.pages.length - 1);
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _scrollToPage(target);
+          });
         },
         builder: (context, editorState) {
           if (editorState.status != EditorStatus.ready ||
@@ -250,7 +283,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
           final doc = editorState.document!;
           final isWhiteboard = doc.kind == NoteKind.whiteboard;
           final page = editorState.currentPage!;
-          final camera = _cameraFor(doc, editorState.pageIndex);
+          final camera = _cameraFor(doc);
           final pdfCache = _pdfCacheFor(doc);
 
           return BlocBuilder<ToolbarCubit, ToolbarState>(
@@ -312,95 +345,53 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
                       child: Stack(
                         children: [
                           Positioned.fill(
-                            child: AnimatedSwitcher(
-                              duration: InkDurations.medium,
-                              switchInCurve: Curves.easeOutCubic,
-                              switchOutCurve: Curves.easeInCubic,
-                              layoutBuilder: (current, previous) => Stack(
-                                fit: StackFit.expand,
-                                children: [...previous, ?current],
-                              ),
-                              transitionBuilder: (child, animation) {
-                                // Forward turn: the old page slides up and
-                                // out while the new one rises from below.
-                                final incoming = child.key ==
-                                    ValueKey(editorState.pageIndex);
-                                final begin = Offset(
-                                    0,
-                                    (incoming ? 0.06 : -0.06) *
-                                        _slideDirection);
-                                return FadeTransition(
-                                  opacity: animation,
-                                  child: SlideTransition(
-                                    position: Tween(
-                                            begin: begin, end: Offset.zero)
-                                        .animate(animation),
-                                    child: child,
-                                  ),
-                                );
-                              },
-                              child: KeyedSubtree(
-                                key: ValueKey(editorState.pageIndex),
-                                child: InkCanvas(
-                                  camera: camera,
-                                  activeStroke: _activeStroke,
-                                  page: page,
-                                  revision: editorState.revision,
-                                  tool: toolbarState.tool,
-                                  penColor: toolbarState.color,
-                                  penWidth: toolbarState.width,
-                                  eraserMode: toolbarState.eraserMode,
-                                  eraserRadius: toolbarState.eraserRadius,
-                                  selectedStrokeIds:
-                                      editorState.selectedStrokeIds,
-                                  selectedImageId:
-                                      editorState.selectedImageId,
-                                  imageCache: _imageCache,
-                                  isWhiteboard: isWhiteboard,
-                                  pdfCache: pdfCache,
-                                  hasNextPage: editorState.pageIndex <
-                                      doc.pages.length - 1,
-                                  hasPreviousPage:
-                                      editorState.pageIndex > 0,
-                                  canAddPage: !isWhiteboard,
-                                  onPageSwitchRequested: isWhiteboard
-                                      ? null
-                                      : (direction) => _handlePageSwitch(
-                                          editorBloc, direction),
-                                  onOverscrollChanged: (progress) =>
-                                      _pageTurnProgress.value = progress,
-                                  onStrokeCommitted: (stroke) => editorBloc
-                                      .add(EditorStrokeCommitted(stroke)),
-                                  onErased: (removed, added) =>
-                                      editorBloc.add(EditorStrokesErased(
-                                          removed, added)),
-                                  onSelectionChanged: (ids, imageId) =>
-                                      editorBloc.add(EditorSelectionChanged(
-                                          ids,
-                                          imageId: imageId)),
-                                  onSelectionTransformed: (before, after) =>
-                                      editorBloc.add(
-                                          EditorSelectionTransformed(
-                                              before, after)),
-                                  onImageTransformed: (before, after) =>
-                                      editorBloc.add(EditorImageTransformed(
-                                          before, after)),
-                                  onZoomChanged: (scale) =>
-                                      _zoomScale.value = scale,
-                                ),
-                              ),
+                            child: InkCanvas(
+                              camera: camera,
+                              activeStroke: _activeStroke,
+                              pages: doc.pages,
+                              pageIndex: editorState.pageIndex,
+                              layout: _layout,
+                              revision: editorState.revision,
+                              tool: toolbarState.tool,
+                              penColor: toolbarState.color,
+                              penWidth: toolbarState.width,
+                              eraserMode: toolbarState.eraserMode,
+                              eraserRadius: toolbarState.eraserRadius,
+                              selectedStrokeIds:
+                                  editorState.selectedStrokeIds,
+                              selectedImageId: editorState.selectedImageId,
+                              imageCache: _imageCache,
+                              isWhiteboard: isWhiteboard,
+                              pdfCache: pdfCache,
+                              canAddPage: !isWhiteboard,
+                              onCurrentPageChanged: (index) => editorBloc
+                                  .add(EditorPageChanged(index)),
+                              onAddPageRequested: () =>
+                                  _addPageAtEnd(editorBloc),
+                              onOverscrollChanged: (progress) =>
+                                  _pageTurnProgress.value = progress,
+                              onStrokeCommitted: (stroke) => editorBloc
+                                  .add(EditorStrokeCommitted(stroke)),
+                              onErased: (removed, added) => editorBloc
+                                  .add(EditorStrokesErased(removed, added)),
+                              onSelectionChanged: (ids, imageId) =>
+                                  editorBloc.add(EditorSelectionChanged(ids,
+                                      imageId: imageId)),
+                              onSelectionTransformed: (before, after) =>
+                                  editorBloc.add(EditorSelectionTransformed(
+                                      before, after)),
+                              onImageTransformed: (before, after) =>
+                                  editorBloc.add(
+                                      EditorImageTransformed(before, after)),
+                              onZoomChanged: (scale) =>
+                                  _zoomScale.value = scale,
                             ),
                           ),
                           if (!isWhiteboard)
                             Positioned.fill(
                               child: IgnorePointer(
                                 child: PageTurnHint(
-                                  progress: _pageTurnProgress,
-                                  hasNextPage: editorState.pageIndex <
-                                      doc.pages.length - 1,
-                                  hasPreviousPage:
-                                      editorState.pageIndex > 0,
-                                ),
+                                    progress: _pageTurnProgress),
                               ),
                             ),
                           Positioned(
@@ -440,8 +431,8 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
                                 child: PageChip(
                                   pageIndex: editorState.pageIndex,
                                   pageCount: doc.pages.length,
-                                  onPageChanged: (index) => editorBloc
-                                      .add(EditorPageChanged(index)),
+                                  onPageChanged: (index) =>
+                                      _goToPage(editorBloc, index),
                                   onAddPage: () => editorBloc
                                       .add(const EditorPageAdded()),
                                 ),

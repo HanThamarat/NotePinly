@@ -2,8 +2,10 @@ import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:notepinly/domain/entities/note_document.dart';
 import 'package:notepinly/domain/entities/page_spec.dart';
 import 'package:notepinly/domain/entities/stroke.dart';
+import 'package:notepinly/presentation/editor/engine/document_layout.dart';
 import 'package:notepinly/presentation/editor/engine/one_euro_filter.dart';
 import 'package:notepinly/presentation/editor/engine/page_camera.dart';
 import 'package:notepinly/presentation/editor/engine/page_transform.dart';
@@ -171,15 +173,68 @@ void main() {
           closeTo(800 - PageCamera.pageMargin, 0.5));
     });
 
-    test('snapToVerticalEdge lands at the top or bottom of the page', () {
+    test('setVerticalOffset scrolls and stays clamped', () {
       final c = pagedCamera();
       c.zoomBy(2, const Offset(600, 400));
-      c.snapToVerticalEdge(top: true);
+      c.setVerticalOffset(PageCamera.pageMargin);
       expect(c.displayToScreen(Offset.zero).dy,
           closeTo(PageCamera.pageMargin, 1e-6));
-      c.snapToVerticalEdge(top: false);
+      c.setVerticalOffset(-1e9);
       expect(c.displayToScreen(const Offset(0, 1000)).dy,
           closeTo(800 - PageCamera.pageMargin, 1e-6));
+    });
+
+    test('a page portal shifts the offset by its origin', () {
+      final c = pagedCamera();
+      final portal = PagePortal(c)..origin = const Offset(0, 500);
+      expect(portal.scale, c.scale);
+      expect(portal.displayToScreen(Offset.zero),
+          c.displayToScreen(const Offset(0, 500)));
+      portal.dispose();
+    });
+  });
+
+  group('DocumentLayout', () {
+    const spec = PageSpec(id: 'p', width: 800, height: 1000);
+    NotePage page([int rotation = 0]) =>
+        NotePage(spec: spec.copyWith(rotation: rotation));
+
+    test('stacks pages vertically with a gap and centers them', () {
+      final layout = DocumentLayout([page(), page(), page()], gap: 24);
+      expect(layout.size, const Size(800, 3 * 1000 + 2 * 24));
+      expect(layout.pageRects[0], const Rect.fromLTWH(0, 0, 800, 1000));
+      expect(layout.pageRects[1], const Rect.fromLTWH(0, 1024, 800, 1000));
+      expect(layout.pageRects[2], const Rect.fromLTWH(0, 2048, 800, 1000));
+    });
+
+    test('a rotated page widens the document and stays centered', () {
+      final layout = DocumentLayout([page(), page(1)], gap: 24);
+      expect(layout.size.width, 1000);
+      expect(layout.pageRects[0].left, 100); // (1000 - 800) / 2
+      expect(layout.pageRects[1], const Rect.fromLTWH(0, 1024, 1000, 800));
+    });
+
+    test('pageAt distinguishes pages from gaps', () {
+      final layout = DocumentLayout([page(), page()], gap: 24);
+      expect(layout.pageAt(const Offset(400, 500)), 0);
+      expect(layout.pageAt(const Offset(400, 1010)), -1); // in the gap
+      expect(layout.pageAt(const Offset(400, 1100)), 1);
+      expect(layout.pageAt(const Offset(400, -50)), -1);
+    });
+
+    test('nearestPageTo tracks the scroll position', () {
+      final layout = DocumentLayout([page(), page()], gap: 24);
+      expect(layout.nearestPageTo(10), 0);
+      expect(layout.nearestPageTo(1010), 0); // gap, closer to page 1's end
+      expect(layout.nearestPageTo(1500), 1);
+      expect(layout.nearestPageTo(99999), 1);
+    });
+
+    test('visibleRange returns the pages crossing the viewport', () {
+      final layout = DocumentLayout([page(), page(), page()], gap: 24);
+      expect(layout.visibleRange(0, 800), (0, 0));
+      expect(layout.visibleRange(900, 1900), (0, 1));
+      expect(layout.visibleRange(0, 9999), (0, 2));
     });
   });
 
