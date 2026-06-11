@@ -1,0 +1,116 @@
+name: Release
+
+# Push a tag like v1.0.0 to build all platforms and publish the
+# artifacts to a GitHub Release. workflow_dispatch builds without
+# publishing (useful to smoke-test the pipeline).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  test:
+    # Goldens in test/preview were recorded on Windows; text rendering
+    # differs per OS, so tests must run on a Windows runner to match.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      - run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - run: flutter test
+
+  build-android:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      - run: flutter build apk --release
+
+      - run: mv build/app/outputs/flutter-apk/app-release.apk NotePinly-${{ github.ref_name }}-android.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: NotePinly-*.apk
+
+  build-windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      - run: flutter build windows --release
+
+      - run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath NotePinly-${{ github.ref_name }}-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: NotePinly-*.zip
+
+  build-web:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      - run: flutter build web --release
+
+      - run: cd build/web && zip -r ../../NotePinly-${{ github.ref_name }}-web.zip .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web
+          path: NotePinly-*.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-android, build-windows, build-web]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
