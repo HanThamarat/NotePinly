@@ -14,18 +14,32 @@ import '../engine/page_transform.dart';
 import '../engine/pdf_background_cache.dart';
 import '../engine/ribbon_builder.dart';
 
-/// Per-stroke committed geometry cache, keyed by stroke id. Entries are
-/// pure functions of the stroke (recolors keep ids, so color is applied
-/// at draw time, not baked into the path).
+/// Per-stroke committed geometry cache, keyed by stroke id. Ops can keep
+/// an id while changing geometry (lasso move/scale via [transformStroke],
+/// and their undos), so each entry remembers the inputs the ribbon was
+/// built from and rebuilds when they change. Recolors reuse the points
+/// list, so they stay cache hits (color is applied at draw time, not
+/// baked into the path).
 class StrokePathCache {
-  final _paths = <String, Path>{};
+  final _entries =
+      <String, ({List<StrokePoint> points, double baseWidth, Path path})>{};
 
-  Path of(Stroke stroke) =>
-      _paths.putIfAbsent(stroke.id, () => RibbonBuilder.build(stroke));
+  Path of(Stroke stroke) {
+    final entry = _entries[stroke.id];
+    if (entry != null &&
+        identical(entry.points, stroke.points) &&
+        entry.baseWidth == stroke.baseWidth) {
+      return entry.path;
+    }
+    final path = RibbonBuilder.build(stroke);
+    _entries[stroke.id] =
+        (points: stroke.points, baseWidth: stroke.baseWidth, path: path);
+    return path;
+  }
 
   void retainOnly(Iterable<Stroke> strokes) {
     final live = {for (final s in strokes) s.id};
-    _paths.removeWhere((id, _) => !live.contains(id));
+    _entries.removeWhere((id, _) => !live.contains(id));
   }
 }
 
