@@ -120,11 +120,11 @@ class PaperPainter extends CustomPainter {
     }
     final topLeft = camera.screenToDisplay(Offset.zero);
     final bottomRight = camera.screenToDisplay(Offset(size.width, size.height));
-    // Clamp to the whiteboard's (huge) extent.
-    final left = (topLeft.dx.clamp(0.0, spec.width) / spacing).floor() * spacing;
-    final top = (topLeft.dy.clamp(0.0, spec.height) / spacing).floor() * spacing;
-    final right = bottomRight.dx.clamp(0.0, spec.width);
-    final bottom = bottomRight.dy.clamp(0.0, spec.height);
+
+    final left = (topLeft.dx / spacing).floor() * spacing;
+    final top = (topLeft.dy / spacing).floor() * spacing;
+    final right = bottomRight.dx;
+    final bottom = bottomRight.dy;
 
     _applyCamera(canvas, camera);
     // Keep dots legible at any zoom: ~1.2 content px, never under ~0.9

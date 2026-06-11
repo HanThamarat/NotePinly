@@ -5,12 +5,14 @@ import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../domain/entities/document_op.dart';
+import '../../../domain/entities/editor_tool.dart';
 import '../../../domain/entities/image_object.dart';
 import '../../../domain/entities/note_document.dart';
 import '../../../domain/entities/page_spec.dart';
 import '../../../domain/entities/stroke.dart';
 import '../../../domain/repositories/note_repository.dart';
 import '../../../domain/util/id_generator.dart';
+import '../engine/shape_detector.dart';
 
 // --- Events ---
 
@@ -26,12 +28,13 @@ final class EditorLoadRequested extends NoteEditorEvent {
 }
 
 final class EditorStrokeCommitted extends NoteEditorEvent {
-  const EditorStrokeCommitted(this.stroke);
+  const EditorStrokeCommitted(this.stroke, {required this.tool});
 
   final Stroke stroke;
+  final EditorTool tool;
 
   @override
-  List<Object?> get props => [stroke];
+  List<Object?> get props => [stroke, tool];
 }
 
 final class EditorStrokesErased extends NoteEditorEvent {
@@ -234,8 +237,7 @@ class NoteEditorBloc extends Bloc<NoteEditorEvent, NoteEditorState> {
             : NoteEditorState(
                 status: EditorStatus.ready, document: initialDocument)) {
     on<EditorLoadRequested>(_onLoad);
-    on<EditorStrokeCommitted>(
-        (e, emit) => _push(AddStrokeOp(state.pageIndex, e.stroke), emit));
+    on<EditorStrokeCommitted>(_onStrokeCommitted);
     on<EditorStrokesErased>(_onErased);
     on<EditorUndoRequested>(_onUndo);
     on<EditorRedoRequested>(_onRedo);
@@ -338,6 +340,17 @@ class NoteEditorBloc extends Bloc<NoteEditorEvent, NoteEditorState> {
   }
 
   // --- Feature handlers ---
+
+  void _onStrokeCommitted(
+      EditorStrokeCommitted event, Emitter<NoteEditorState> emit) {
+    var stroke = event.stroke;
+    // Always detect shapes (GoodNotes style), but we could restrict to event.tool == EditorTool.shape
+    final result = ShapeDetector.detect(stroke.points, stroke.baseWidth);
+    if (result != null) {
+      stroke = stroke.copyWith(points: result.perfectedPoints);
+    }
+    _push(AddStrokeOp(state.pageIndex, stroke), emit);
+  }
 
   void _onErased(EditorStrokesErased event, Emitter<NoteEditorState> emit) {
     if (event.removed.isEmpty && event.added.isEmpty) return;

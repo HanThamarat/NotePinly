@@ -49,7 +49,7 @@ class NoteEditorScreen extends StatefulWidget {
 }
 
 class _NoteEditorScreenState extends State<NoteEditorScreen>
-    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
+    with WidgetsBindingObserver {
   final _activeStroke = ActiveStrokeController();
   final _imageCache = ImageRasterCache();
   final _zoomScale = ValueNotifier<double?>(null);
@@ -58,11 +58,6 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
   PdfBackgroundCache? _pdfCache;
   NoteEditorBloc? _bloc;
   DocumentLayout _layout = DocumentLayout(const []);
-
-  /// Animated scroll for page navigation (chip arrows, new page).
-  late final AnimationController _scrollAnimation;
-  double _scrollBegin = 0;
-  double _scrollTarget = 0;
 
   NoteRepository? get _repository {
     try {
@@ -84,10 +79,6 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _scrollAnimation = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 350),
-    )..addListener(_onScrollTick);
   }
 
   @override
@@ -102,7 +93,6 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _scrollAnimation.dispose();
     _activeStroke.dispose();
     _imageCache.dispose();
     _zoomScale.dispose();
@@ -125,13 +115,6 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
     return camera;
   }
 
-  // --- Page navigation: animated scroll through the document ---
-
-  void _onScrollTick() {
-    final t = Curves.easeInOutCubic.transform(_scrollAnimation.value);
-    _camera?.setVerticalOffset(ui.lerpDouble(_scrollBegin, _scrollTarget, t)!);
-  }
-
   /// Scrolls the document so [index]'s page top sits under the toolbar.
   void _scrollToPage(int index) {
     final camera = _camera;
@@ -139,11 +122,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
     if (camera == null || doc == null || doc.pages.isEmpty) return;
     final layout = DocumentLayout(doc.pages);
     final rect = layout.pageRects[index.clamp(0, doc.pages.length - 1)];
-    _scrollBegin = camera.verticalOffset;
-    _scrollTarget = PageCamera.pageMargin - rect.top * camera.scale;
-    _scrollAnimation
-      ..stop()
-      ..forward(from: 0);
+    camera.setVerticalOffset(PageCamera.pageMargin - rect.top * camera.scale);
   }
 
   /// Chip navigation: update the bloc and glide to the page.
@@ -291,6 +270,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
               final editorBloc = context.read<NoteEditorBloc>();
               return Scaffold(
                 backgroundColor: InkColors.backdrop,
+                resizeToAvoidBottomInset: false,
                 body: Column(
                   children: [
                     EditorToolbar(
@@ -371,7 +351,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
                               onOverscrollChanged: (progress) =>
                                   _pageTurnProgress.value = progress,
                               onStrokeCommitted: (stroke) => editorBloc
-                                  .add(EditorStrokeCommitted(stroke)),
+                                  .add(EditorStrokeCommitted(stroke, tool: toolbarState.tool)),
                               onErased: (removed, added) => editorBloc
                                   .add(EditorStrokesErased(removed, added)),
                               onSelectionChanged: (ids, imageId) =>

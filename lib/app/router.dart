@@ -20,44 +20,49 @@ GoRouter buildRouter({
     routes: [
       GoRoute(
         path: '/',
-        builder: (context, state) {
+        pageBuilder: (context, state) {
           remember('/');
-          return const LibraryScreen();
+          return const NoTransitionPage(child: LibraryScreen());
         },
         routes: [
           GoRoute(
             path: 'folder/:id',
-            builder: (context, state) {
+            pageBuilder: (context, state) {
               final id = state.pathParameters['id']!;
               remember('/folder/$id');
-              return LibraryScreen(folderId: id);
+              return NoTransitionPage(child: LibraryScreen(folderId: id));
             },
           ),
           GoRoute(
             path: 'note/:id',
-            builder: (context, state) {
+            pageBuilder: (context, state) {
               final id = state.pathParameters['id']!;
               remember('/note/$id');
-              return NoteEditorScreen(
-                noteId: id,
-                title: state.extra as String?,
+              return NoTransitionPage(
+                child: NoteEditorScreen(
+                  noteId: id,
+                  title: state.extra as String?,
+                ),
               );
             },
           ),
           GoRoute(
             path: 'whiteboard/:id',
-            builder: (context, state) {
+            pageBuilder: (context, state) {
               final id = state.pathParameters['id']!;
               remember('/whiteboard/$id');
-              return NoteEditorScreen(
-                noteId: id,
-                title: state.extra as String?,
+              return NoTransitionPage(
+                child: NoteEditorScreen(
+                  noteId: id,
+                  title: state.extra as String?,
+                ),
               );
             },
           ),
           GoRoute(
             path: 'settings',
-            builder: (context, state) => const SettingsScreen(),
+            pageBuilder: (context, state) =>
+                const NoTransitionPage(child: SettingsScreen()),
           ),
         ],
       ),

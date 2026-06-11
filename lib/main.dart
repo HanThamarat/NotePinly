@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:drift_flutter/drift_flutter.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -18,6 +19,13 @@ import 'domain/services/pdf_renderer.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Immersive edge-to-edge mode.
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    systemNavigationBarColor: Colors.transparent,
+  ));
 
   final db = AppDatabase(driftDatabase(name: 'notepinly'));
   final documentsDir = await getApplicationDocumentsDirectory();
