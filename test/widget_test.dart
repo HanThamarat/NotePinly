@@ -62,10 +62,18 @@ void main() {
       expect(buttonOf(tester, Icons.undo_rounded).onPressed, isNotNull);
     });
 
+    testWidgets('a finger never draws, even before any stylus contact',
+        (tester) async {
+      await pumpEditor(tester);
+      await drawStroke(tester, kind: PointerDeviceKind.touch);
+      // No stroke committed, so there is nothing to undo.
+      expect(buttonOf(tester, Icons.undo_rounded).onPressed, isNull);
+    });
+
     testWidgets('after stylus contact, fingers no longer draw',
         (tester) async {
       await pumpEditor(tester);
-      await drawStroke(tester); // stylus flips the session
+      await drawStroke(tester);
       await drawStroke(tester, kind: PointerDeviceKind.touch);
       await tester.tap(find.widgetWithIcon(IconButton, Icons.undo_rounded));
       await tester.pump();

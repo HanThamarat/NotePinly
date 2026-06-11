@@ -41,6 +41,10 @@ class ActiveStrokeController extends ChangeNotifier {
   /// The accumulated stamped path, in page coordinates.
   Path get path => _path;
 
+  /// The filtered points captured so far (read-only, for tests).
+  @visibleForTesting
+  List<StrokePoint> get debugPoints => List.unmodifiable(_points);
+
   /// Short predicted tail ahead of the last real sample, rebuilt each
   /// sample from current velocity to hide one frame of latency.
   Path? get predictedTail {
@@ -152,16 +156,19 @@ class ActiveStrokeController extends ChangeNotifier {
   }
 
   /// Trapezoid between the two samples plus a round joint at the new one.
+  /// Vertex order must wind the same way as [Path.addOval]: overlapping
+  /// same-winding contours stack under the non-zero fill rule, while
+  /// opposite windings cancel and punch holes in the ink.
   void _appendSegment(Offset a, double aHw, Offset b, double bHw) {
     var dir = b - a;
     if (dir.distanceSquared < 1e-12) return;
     final inv = 1 / dir.distance;
     final n = Offset(-dir.dy * inv, dir.dx * inv);
     _path
-      ..moveTo(a.dx + n.dx * aHw, a.dy + n.dy * aHw)
-      ..lineTo(b.dx + n.dx * bHw, b.dy + n.dy * bHw)
+      ..moveTo(a.dx - n.dx * aHw, a.dy - n.dy * aHw)
       ..lineTo(b.dx - n.dx * bHw, b.dy - n.dy * bHw)
-      ..lineTo(a.dx - n.dx * aHw, a.dy - n.dy * aHw)
+      ..lineTo(b.dx + n.dx * bHw, b.dy + n.dy * bHw)
+      ..lineTo(a.dx + n.dx * aHw, a.dy + n.dy * aHw)
       ..close()
       ..addOval(Rect.fromCircle(center: b, radius: bHw));
   }

@@ -115,11 +115,14 @@ abstract final class RibbonBuilder {
       right.add(pos - normal * w);
     }
 
-    path.moveTo(left.first.dx, left.first.dy);
-    for (final p in left.skip(1)) {
+    // Right edge forward, left edge back: winds the same way as
+    // [Path.addOval], so the cap ovals stack instead of cancelling under
+    // the non-zero fill rule (opposite windings punch holes at the caps).
+    path.moveTo(right.first.dx, right.first.dy);
+    for (final p in right.skip(1)) {
       path.lineTo(p.dx, p.dy);
     }
-    for (final p in right.reversed) {
+    for (final p in left.reversed) {
       path.lineTo(p.dx, p.dy);
     }
     path.close();

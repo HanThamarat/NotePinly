@@ -1,8 +1,10 @@
 import 'dart:ui';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:notepinly/domain/entities/document_op.dart';
 import 'package:notepinly/domain/entities/image_object.dart';
 import 'package:notepinly/domain/entities/stroke.dart';
+import 'package:notepinly/presentation/editor/canvas/ink_painters.dart';
 import 'package:notepinly/presentation/editor/engine/eraser_engine.dart';
 import 'package:notepinly/presentation/editor/engine/lasso_engine.dart';
 
@@ -144,6 +146,34 @@ void main() {
           [_line('a', 0), _line('b', 100)]);
       expect(bounds!.top, lessThanOrEqualTo(0));
       expect(bounds.bottom, greaterThanOrEqualTo(100));
+    });
+  });
+
+  group('StrokePathCache', () {
+    test('rebuilds the path when a lasso transform moves the stroke', () {
+      final cache = StrokePathCache();
+      final stroke = _line('a', 50);
+      final original = cache.of(stroke);
+
+      // Lasso move keeps the id but rewrites the geometry.
+      final moved = transformStroke(stroke, offset: const Offset(40, 30));
+      final movedPath = cache.of(moved);
+
+      expect(movedPath.getBounds().center.dx,
+          closeTo(original.getBounds().center.dx + 40, 1));
+      expect(movedPath.getBounds().center.dy,
+          closeTo(original.getBounds().center.dy + 30, 1));
+      // Undoing the move (same id, original geometry) lands back.
+      expect(cache.of(stroke).getBounds().center.dx,
+          closeTo(original.getBounds().center.dx, 1));
+    });
+
+    test('recolor stays a cache hit (points list is reused)', () {
+      final cache = StrokePathCache();
+      final stroke = _line('a', 50);
+      final path = cache.of(stroke);
+      final recolored = stroke.copyWith(color: const Color(0xFFFF0000));
+      expect(identical(cache.of(recolored), path), isTrue);
     });
   });
 }
