@@ -37,11 +37,11 @@ enum _DragKind {
 /// touched.
 ///
 /// Input contract (PRODUCT.md principle 5):
-/// - Stylus always operates the active tool; first stylus contact flips
-///   the session into stylus mode and fingers stop drawing.
-/// - Before stylus mode: one finger uses the tool, two fingers pan/zoom
-///   (a young one-finger action is cancelled when the second lands).
-/// - In stylus mode: one finger pans, two fingers pan/zoom.
+/// - Only the stylus (S Pen / Apple Pencil) — or the mouse on desktop —
+///   operates the active tool; fingers never draw.
+/// - One finger pans, two fingers pinch-zoom (and pan together).
+/// - While the stylus is down, finger movement is ignored (palm
+///   rejection).
 /// - Inverted stylus or the S Pen barrel button force the eraser.
 ///
 /// Tool gestures land on whichever page is under the pointer; the canvas
@@ -132,10 +132,7 @@ class _InkCanvasState extends State<InkCanvas> {
   final _interaction = CanvasInteraction();
   final _portals = <int, PagePortal>{};
 
-  bool _stylusSeen = false;
   int? _primaryPointer;
-  bool _primaryIsTouch = false;
-  Duration _dragStartedAt = Duration.zero;
   int _idSeq = 0;
 
   _DragKind _drag = _DragKind.none;
@@ -260,34 +257,20 @@ class _InkCanvasState extends State<InkCanvas> {
 
   void _onPointerDown(PointerDownEvent e) {
     if (_isDrawingDevice(e)) {
-      if (e.kind != PointerDeviceKind.mouse) _stylusSeen = true;
-      if (_primaryIsTouch) _cancelPrimaryAction();
+      if (_primaryPointer != null) return;
+      // Palm rejection: drop any finger contacts the moment the stylus
+      // lands so they can't pan under the pen.
       _touches.clear();
       _resetGestureBaseline();
-      _beginPrimary(e, withTouch: false);
+      _beginPrimary(e);
       return;
     }
 
     if (e.kind == PointerDeviceKind.touch) {
+      // Fingers never operate the tool: one finger pans, two fingers
+      // pinch-zoom and pan together.
       _touches[e.pointer] = e.localPosition;
-      if (_touches.length == 1) {
-        if (!_stylusSeen && _primaryPointer == null) {
-          // A finger on the backdrop scrolls instead of drawing.
-          if (!_beginPrimary(e, withTouch: true)) _resetGestureBaseline();
-        } else {
-          _resetGestureBaseline();
-        }
-      } else if (_touches.length == 2 && _primaryIsTouch) {
-        final ageMs = (e.timeStamp - _dragStartedAt).inMilliseconds;
-        if (ageMs < 250) {
-          _cancelPrimaryAction();
-        } else {
-          _finishPrimaryAction(e.localPosition);
-        }
-        _resetGestureBaseline();
-      } else {
-        _resetGestureBaseline();
-      }
+      _resetGestureBaseline();
     }
   }
 
@@ -320,19 +303,16 @@ class _InkCanvasState extends State<InkCanvas> {
 
   // --- Primary (tool) action ---
 
-  /// Returns false when the pointer landed outside every page; the
-  /// gesture then falls through to scrolling.
-  bool _beginPrimary(PointerDownEvent e, {required bool withTouch}) {
+  /// No-op when the pointer landed outside every page (gaps, backdrop).
+  void _beginPrimary(PointerDownEvent e) {
     final pageIndex = _pageIndexAt(e.localPosition);
-    if (pageIndex < 0) return false;
+    if (pageIndex < 0) return;
     if (pageIndex != _currentPageIndex) {
       // Route the bloc to the touched page before any op is committed.
       widget.onCurrentPageChanged?.call(pageIndex);
     }
     setState(() => _gesturePageIndex = pageIndex);
     _primaryPointer = e.pointer;
-    _primaryIsTouch = withTouch;
-    _dragStartedAt = e.timeStamp;
     final page = _toPageCoords(pageIndex, e.localPosition);
 
     final tool = _forcesEraser(e) ? EditorTool.eraser : widget.tool;
@@ -364,7 +344,6 @@ class _InkCanvasState extends State<InkCanvas> {
       case EditorTool.lasso:
         _beginLassoInteraction(page, pageIndex);
     }
-    return true;
   }
 
   void _beginLassoInteraction(Offset page, int pageIndex) {
@@ -540,8 +519,10 @@ class _InkCanvasState extends State<InkCanvas> {
     }
     _drag = _DragKind.none;
     _primaryPointer = null;
-    _primaryIsTouch = false;
     setState(() => _gesturePageIndex = null);
+    // Fingers may have rested on the canvas while the stylus was down;
+    // rebase the pan/zoom gesture on where they are now.
+    _resetGestureBaseline();
   }
 
   void _finishLasso(Offset localPosition) {
@@ -602,8 +583,8 @@ class _InkCanvasState extends State<InkCanvas> {
     }
     _drag = _DragKind.none;
     _primaryPointer = null;
-    _primaryIsTouch = false;
     setState(() => _gesturePageIndex = null);
+    _resetGestureBaseline();
   }
 
   double _normalizedPressure(PointerEvent e) {
@@ -665,7 +646,9 @@ class _InkCanvasState extends State<InkCanvas> {
   }
 
   void _updateGesture() {
-    if (_touches.isEmpty || _primaryIsTouch) return;
+    // Palm rejection: while the stylus operates the tool, fingers on the
+    // canvas must not pan or zoom under it.
+    if (_touches.isEmpty || _primaryPointer != null) return;
     final focal =
         _touches.values.reduce((a, b) => a + b) / _touches.length.toDouble();
     final span = _currentSpan();

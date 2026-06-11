@@ -25,7 +25,7 @@ A cross-platform handwriting note-taking app built with Flutter — pressure-sen
 ## Features
 
 - **Low-latency inking** — pressure- and tilt-aware strokes with one-euro smoothing, Catmull-Rom interpolation, and stroke-tip prediction
-- **Palm rejection** — once a stylus touches the page, fingers only pan and zoom
+- **Palm rejection** — only the stylus draws; fingers always pan (one finger) and zoom (two fingers)
 - **Dual-mode eraser** — erase whole strokes, or split strokes mid-line (area mode)
 - **Lasso select** — move, resize, recolor, or delete any selection
 - **Pages & paper templates** — blank, lined, grid, and dotted paper; per-page rotation
