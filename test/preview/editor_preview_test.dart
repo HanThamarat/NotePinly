@@ -364,6 +364,43 @@ void main() {
     await tester.pumpAndSettle();
     await capture(tester, 'editor_width_popover');
   });
+
+  preview('editor — custom ink mixer open', (tester) async {
+    await pumpEditor(tester);
+    await writeSample(tester);
+    await tester.tap(find.bySemanticsLabel('Custom color'));
+    await tester.pumpAndSettle();
+    // Mix a teal ink: hue dot, then a darker rung of the shade ladder.
+    await tester.tap(find.bySemanticsLabel('Teal ink'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.bySemanticsLabel('Dark teal'));
+    await tester.pumpAndSettle();
+    await capture(tester, 'editor_ink_mixer');
+    // Close the popover so the picker disposes and the teal pick lands
+    // in the session recents (shown in the next capture).
+    await tester.tap(find.bySemanticsLabel('Custom color'));
+    await tester.pumpAndSettle();
+  });
+
+  // Runs after the mixer capture on purpose: the teal pick above is
+  // session-recent state, so this popover also shows the Recent row.
+  preview('editor — selection recolored via custom ink', (tester) async {
+    await pumpEditor(tester);
+    await writeSample(tester);
+    await tester.tap(find.byIcon(Icons.highlight_alt_rounded));
+    await tester.pump();
+    await draw(tester, const Offset(340, 260), [
+      for (var i = 0; i < 10; i++) const Offset(48, 0),
+      for (var i = 0; i < 10; i++) const Offset(0, 26),
+      for (var i = 0; i < 10; i++) const Offset(-48, 0),
+      for (var i = 0; i < 10; i++) const Offset(0, -26),
+    ]);
+    await tester.tap(find.bySemanticsLabel('Custom recolor'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.bySemanticsLabel('Berry ink'));
+    await tester.pumpAndSettle();
+    await capture(tester, 'editor_selection_recolor');
+  });
 }
 
 /// In-memory library data for the library captures — no drift, no IO.

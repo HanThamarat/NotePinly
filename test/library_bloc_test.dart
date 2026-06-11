@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:bloc_test/bloc_test.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:notepinly/data/db/app_database.dart';
@@ -22,85 +21,95 @@ void main() {
 
   tearDown(() async {
     await db.close();
-    tempDir.deleteSync(recursive: true);
+    // Unawaited note-store writes may still hold file handles for a beat
+    // (slow CI runners especially); a leaked temp dir beats a flaky suite.
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    try {
+      tempDir.deleteSync(recursive: true);
+    } on FileSystemException {
+      // Leave it for the OS temp cleaner.
+    }
   });
 
+  LibraryBloc startBloc() {
+    final bloc = LibraryBloc(repository: repo);
+    addTearDown(bloc.close);
+    bloc.add(const LibraryStarted(null));
+    return bloc;
+  }
+
+  /// Waits until the bloc reaches a state matching [test] — repository
+  /// work is real async IO, so fixed delays flake on slow runners.
+  Future<LibraryState> waitFor(
+    LibraryBloc bloc,
+    bool Function(LibraryState) test, {
+    String? reason,
+  }) async {
+    if (test(bloc.state)) return bloc.state;
+    return bloc.stream.firstWhere(test).timeout(
+          const Duration(seconds: 10),
+          onTimeout: () => throw TestFailure(
+              'timed out waiting for state${reason == null ? '' : ': $reason'}'),
+        );
+  }
+
   group('LibraryBloc', () {
-    blocTest<LibraryBloc, LibraryState>(
-      'starts watching and reaches ready with empty data',
-      build: () => LibraryBloc(repository: repo),
-      act: (bloc) => bloc.add(const LibraryStarted(null)),
-      wait: const Duration(milliseconds: 50),
-      verify: (bloc) {
-        expect(bloc.state.status, LibraryStatus.ready);
-        expect(bloc.state.notes, isEmpty);
-        expect(bloc.state.folders, isEmpty);
-      },
-    );
+    test('starts watching and reaches ready with empty data', () async {
+      final bloc = startBloc();
+      final state = await waitFor(bloc, (s) => s.status == LibraryStatus.ready,
+          reason: 'ready');
+      expect(state.notes, isEmpty);
+      expect(state.folders, isEmpty);
+    });
 
-    blocTest<LibraryBloc, LibraryState>(
-      'creating a note surfaces it and requests navigation',
-      build: () => LibraryBloc(repository: repo),
-      act: (bloc) async {
-        bloc.add(const LibraryStarted(null));
-        await Future<void>.delayed(const Duration(milliseconds: 20));
-        bloc.add(const LibraryNoteCreated(NoteKind.note));
-      },
-      wait: const Duration(milliseconds: 100),
-      verify: (bloc) {
-        expect(bloc.state.notes, hasLength(1));
-      },
-      expect: () => contains(
-        isA<LibraryState>().having((s) => s.openNoteId, 'openNoteId', isNotNull),
-      ),
-    );
+    test('creating a note surfaces it and requests navigation', () async {
+      final bloc = startBloc();
+      await waitFor(bloc, (s) => s.status == LibraryStatus.ready,
+          reason: 'ready');
+      // openNoteId is transient (set, then cleared); watch for it before
+      // dispatching the create.
+      final openRequested = bloc.stream
+          .firstWhere((s) => s.openNoteId != null)
+          .timeout(const Duration(seconds: 10));
+      bloc.add(const LibraryNoteCreated(NoteKind.note));
+      final opened = await openRequested;
+      expect(opened.openNoteId, isNotNull);
+      await waitFor(bloc, (s) => s.notes.length == 1,
+          reason: 'note appears in the list');
+    });
 
-    blocTest<LibraryBloc, LibraryState>(
-      'folder create / rename / delete round-trip',
-      build: () => LibraryBloc(repository: repo),
-      act: (bloc) async {
-        bloc.add(const LibraryStarted(null));
-        await Future<void>.delayed(const Duration(milliseconds: 20));
-        bloc.add(const LibraryFolderCreated('School'));
-        await Future<void>.delayed(const Duration(milliseconds: 50));
-        final folder = bloc.state.folders.single;
-        bloc.add(LibraryFolderRenamed(folder.id, 'University'));
-        await Future<void>.delayed(const Duration(milliseconds: 50));
-      },
-      wait: const Duration(milliseconds: 50),
-      verify: (bloc) {
-        expect(bloc.state.folders.single.name, 'University');
-      },
-    );
+    test('folder create / rename / delete round-trip', () async {
+      final bloc = startBloc();
+      await waitFor(bloc, (s) => s.status == LibraryStatus.ready,
+          reason: 'ready');
+      bloc.add(const LibraryFolderCreated('School'));
+      final created = await waitFor(bloc, (s) => s.folders.length == 1,
+          reason: 'folder created');
+      bloc.add(LibraryFolderRenamed(created.folders.single.id, 'University'));
+      await waitFor(
+          bloc, (s) => s.folders.singleOrNull?.name == 'University',
+          reason: 'folder renamed');
+    });
 
-    blocTest<LibraryBloc, LibraryState>(
-      'deleting a note removes it from the list',
-      build: () => LibraryBloc(repository: repo),
-      act: (bloc) async {
-        bloc.add(const LibraryStarted(null));
-        await Future<void>.delayed(const Duration(milliseconds: 20));
-        bloc.add(const LibraryNoteCreated(NoteKind.note));
-        await Future<void>.delayed(const Duration(milliseconds: 50));
-        bloc.add(LibraryNoteDeleted(bloc.state.notes.single.id));
-        await Future<void>.delayed(const Duration(milliseconds: 50));
-      },
-      wait: const Duration(milliseconds: 50),
-      verify: (bloc) => expect(bloc.state.notes, isEmpty),
-    );
+    test('deleting a note removes it from the list', () async {
+      final bloc = startBloc();
+      await waitFor(bloc, (s) => s.status == LibraryStatus.ready,
+          reason: 'ready');
+      bloc.add(const LibraryNoteCreated(NoteKind.note));
+      final created = await waitFor(bloc, (s) => s.notes.length == 1,
+          reason: 'note created');
+      bloc.add(LibraryNoteDeleted(created.notes.single.id));
+      await waitFor(bloc, (s) => s.notes.isEmpty, reason: 'note deleted');
+    });
 
-    blocTest<LibraryBloc, LibraryState>(
-      'whiteboards are created with the whiteboard kind',
-      build: () => LibraryBloc(repository: repo),
-      act: (bloc) async {
-        bloc.add(const LibraryStarted(null));
-        await Future<void>.delayed(const Duration(milliseconds: 20));
-        bloc.add(const LibraryNoteCreated(NoteKind.whiteboard));
-        await Future<void>.delayed(const Duration(milliseconds: 50));
-      },
-      wait: const Duration(milliseconds: 50),
-      verify: (bloc) {
-        expect(bloc.state.notes.single.kind, NoteKind.whiteboard);
-      },
-    );
+    test('whiteboards are created with the whiteboard kind', () async {
+      final bloc = startBloc();
+      await waitFor(bloc, (s) => s.status == LibraryStatus.ready,
+          reason: 'ready');
+      bloc.add(const LibraryNoteCreated(NoteKind.whiteboard));
+      final state = await waitFor(bloc, (s) => s.notes.length == 1,
+          reason: 'whiteboard created');
+      expect(state.notes.single.kind, NoteKind.whiteboard);
+    });
   });
 }

@@ -131,7 +131,7 @@ class EditorToolbar extends StatelessWidget {
                     selected: ink == color,
                     onPressed: () => onColorSelected(ink),
                   ),
-                _CustomColorButton(
+                CustomColorButton(
                   currentColor: color,
                   isActive: !InkColors.penInks.contains(color),
                   onColorSelected: onColorSelected,
@@ -495,78 +495,6 @@ class _ColorSwatch extends StatelessWidget {
                   height: selected ? 12 : 16,
                   decoration:
                       BoxDecoration(shape: BoxShape.circle, color: color),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// The seventh swatch: a hue-ring button opening the custom color picker.
-class _CustomColorButton extends StatelessWidget {
-  const _CustomColorButton({
-    required this.currentColor,
-    required this.isActive,
-    required this.onColorSelected,
-  });
-
-  final Color currentColor;
-  final bool isActive;
-  final ValueChanged<Color> onColorSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    return MenuAnchor(
-      menuChildren: [
-        InkColorPicker(initial: currentColor, onChanged: onColorSelected),
-      ],
-      builder: (context, menuController, _) => Tooltip(
-        message: 'Custom color',
-        child: Semantics(
-          button: true,
-          label: 'Custom color',
-          child: InkResponse(
-            onTap: () => menuController.isOpen
-                ? menuController.close()
-                : menuController.open(),
-            radius: 20,
-            child: SizedBox(
-              width: 32,
-              height: 44,
-              child: Center(
-                child: Container(
-                  width: 22,
-                  height: 22,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: isActive ? currentColor : Colors.transparent,
-                      width: 2,
-                    ),
-                  ),
-                  child: Center(
-                    child: Container(
-                      width: isActive ? 12 : 16,
-                      height: isActive ? 12 : 16,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: isActive
-                            ? null
-                            : const SweepGradient(colors: [
-                                Color(0xFFB02A2D),
-                                Color(0xFFD0750A),
-                                Color(0xFF287C42),
-                                Color(0xFF005D89),
-                                Color(0xFF623E96),
-                                Color(0xFFB02A2D),
-                              ]),
-                        color: isActive ? currentColor : null,
-                      ),
-                    ),
-                  ),
                 ),
               ),
             ),

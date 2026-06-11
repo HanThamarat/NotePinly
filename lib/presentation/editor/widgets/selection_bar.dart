@@ -1,14 +1,17 @@
 import 'package:flutter/material.dart';
 
 import '../../../app/theme/tokens.dart';
+import 'color_picker.dart';
 
 /// Floating action bar shown while a lasso selection (or an image) is
-/// active: recolor swatches, delete, dismiss. Quiet, one row, no modal.
+/// active: recolor swatches + custom ink mixer, delete, dismiss. Quiet,
+/// one row, no modal.
 class SelectionBar extends StatelessWidget {
   const SelectionBar({
     super.key,
     required this.strokeCount,
     required this.isImage,
+    required this.selectionColor,
     required this.onRecolor,
     required this.onDelete,
     required this.onDismiss,
@@ -16,6 +19,10 @@ class SelectionBar extends StatelessWidget {
 
   final int strokeCount;
   final bool isImage;
+
+  /// Current ink of the selection (first selected stroke); seeds the
+  /// custom mixer so it opens on the shade being replaced.
+  final Color selectionColor;
   final ValueChanged<Color> onRecolor;
   final VoidCallback onDelete;
   final VoidCallback onDismiss;
@@ -63,6 +70,13 @@ class SelectionBar extends StatelessWidget {
                     ),
                   ),
                 ),
+              CustomColorButton(
+                currentColor: selectionColor,
+                isActive: !InkColors.penInks.contains(selectionColor),
+                onColorSelected: onRecolor,
+                label: 'Custom recolor',
+                cellWidth: 28,
+              ),
             ],
             const SizedBox(width: InkSpace.sm),
             Container(width: 1, height: 22, color: InkColors.divider),

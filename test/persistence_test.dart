@@ -45,7 +45,14 @@ void main() {
 
   tearDown(() async {
     await db.close();
-    tempDir.deleteSync(recursive: true);
+    // Unawaited writes may still hold file handles for a beat (slow CI
+    // runners especially); a leaked temp dir beats a flaky suite.
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    try {
+      tempDir.deleteSync(recursive: true);
+    } on FileSystemException {
+      // Leave it for the OS temp cleaner.
+    }
   });
 
   group('Document ops JSON', () {
