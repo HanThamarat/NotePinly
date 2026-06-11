@@ -28,10 +28,23 @@ import 'package:notepinly/presentation/editor/note_editor_screen.dart';
 import 'package:notepinly/presentation/editor/widgets/page_chip.dart';
 import 'package:notepinly/presentation/library/library_screen.dart';
 
+/// The SDK's bundled fonts, wherever Flutter is installed (local machines
+/// and CI runners differ).
+String _materialFontsDir() {
+  final root = Platform.environment['FLUTTER_ROOT'];
+  if (root != null && root.isNotEmpty) {
+    return '$root/bin/cache/artifacts/material_fonts';
+  }
+  // `flutter test` runs on the SDK's own Dart:
+  // <flutter>/bin/cache/dart-sdk/bin/dart(.exe)
+  final cache = File(Platform.resolvedExecutable).parent.parent.parent;
+  return '${cache.path}/artifacts/material_fonts';
+}
+
 Future<void> _loadRealFonts() async {
-  const dir = r'C:\flutter\bin\cache\artifacts\material_fonts';
+  final dir = _materialFontsDir();
   ByteData read(String file) =>
-      ByteData.view(File('$dir\\$file').readAsBytesSync().buffer);
+      ByteData.view(File('$dir/$file').readAsBytesSync().buffer);
 
   final roboto = FontLoader('Roboto');
   for (final file in [
