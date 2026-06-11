@@ -412,6 +412,13 @@ class _NoteEditorScreenState extends State<NoteEditorScreen>
                                       editorState.selectedImageId != null &&
                                           editorState
                                               .selectedStrokeIds.isEmpty,
+                                  selectionColor: page.strokes
+                                          .where((s) => editorState
+                                              .selectedStrokeIds
+                                              .contains(s.id))
+                                          .firstOrNull
+                                          ?.color ??
+                                      toolbarState.color,
                                   onRecolor: (color) => editorBloc
                                       .add(EditorSelectionRecolored(color)),
                                   onDelete: () => editorBloc
