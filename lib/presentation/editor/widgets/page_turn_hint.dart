@@ -41,7 +41,7 @@ class PageTurnHint extends StatelessWidget {
                             size: 17, color: InkColors.inkMuted),
                         SizedBox(width: InkSpace.sm),
                         Text(
-                          'New page',
+                          'New page', //fwfwaffwa
                           style: TextStyle(
                             fontSize: 13.5,
                             fontWeight: FontWeight.w500,
